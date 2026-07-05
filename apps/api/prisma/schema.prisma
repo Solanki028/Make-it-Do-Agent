@@ -1,0 +1,102 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id            String         @id @default(uuid())
+  email         String         @unique
+  passwordHash  String
+  createdAt     DateTime       @default(now())
+  conversations Conversation[]
+}
+
+model Conversation {
+  id        String     @id @default(uuid())
+  userId    String
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  title     String
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  tasks     TaskGoal[]
+}
+
+enum GoalStatus {
+  PENDING
+  RUNNING
+  PAUSED
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+model TaskGoal {
+  id             String          @id @default(uuid())
+  conversationId String
+  conversation   Conversation    @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  originalGoal   String
+  status         GoalStatus      @default(PENDING)
+  createdAt      DateTime        @default(now())
+  endedAt        DateTime?
+  steps          ExecutionStep[]
+  tokenLogs      TokenLog[]
+}
+
+model ExecutionStep {
+  id         String     @id @default(uuid())
+  taskGoalId String
+  taskGoal   TaskGoal   @relation(fields: [taskGoalId], references: [id], onDelete: Cascade)
+  nodeName   String
+  logs       String
+  stepOrder  Int
+  timestamp  DateTime   @default(now())
+  toolCalls  ToolCall[]
+}
+
+enum ToolStatus {
+  SUCCESS
+  FAILED
+}
+
+model ToolCall {
+  id              String        @id @default(uuid())
+  executionStepId String
+  executionStep   ExecutionStep @relation(fields: [executionStepId], references: [id], onDelete: Cascade)
+  serverName      String
+  toolName        String
+  arguments       Json
+  result          Json?
+  status          ToolStatus
+  errorMessage    String?
+  durationMs      Int
+}
+
+model TokenLog {
+  id               String   @id @default(uuid())
+  taskGoalId       String
+  taskGoal         TaskGoal @relation(fields: [taskGoalId], references: [id], onDelete: Cascade)
+  modelName        String
+  promptTokens     Int
+  completionTokens Int
+  costUSD          Decimal  @db.Decimal(10, 6)
+  createdAt        DateTime @default(now())
+}
+
+enum TransportType {
+  STDIO
+  SSE
+}
+
+model MCPConfig {
+  id               String        @id @default(uuid())
+  name             String        @unique
+  transportType    TransportType
+  connectionString String
+  envVariables     Json
+  isEnabled        Boolean       @default(true)
+  updatedAt        DateTime      @updatedAt
+}
