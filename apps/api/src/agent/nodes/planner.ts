@@ -1,4 +1,4 @@
-import { ChatOpenAI } from '@langchain/openai';
+import { ChatGroq } from '@langchain/groq';
 import { env } from '../../config/env.js';
 import { AgentState } from '../state.js';
 import { mcpClientManager } from '../../mcp/client-manager.js';
@@ -7,8 +7,8 @@ import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 export async function plannerNode(state: AgentState): Promise<Partial<AgentState>> {
   console.log('--- ENTERING PLANNER NODE ---');
 
-  if (!env.OPENAI_API_KEY) {
-    console.warn('OPENAI_API_KEY is missing! Using Mock Planner Output.');
+  if (!env.GROQ_API_KEY) {
+    console.warn('GROQ_API_KEY is missing! Using Mock Planner Output.');
     const mockPlan = ['Analyze workspace', 'Mock list directory content', 'Produce report'];
     
     if (state.stepCount === 0) {
@@ -32,9 +32,9 @@ export async function plannerNode(state: AgentState): Promise<Partial<AgentState
     }
   }
 
-  const model = new ChatOpenAI({
-    openAIApiKey: env.OPENAI_API_KEY,
-    modelName: 'gpt-4o-mini',
+  const model = new ChatGroq({
+    apiKey: env.GROQ_API_KEY,
+    model: 'llama-3.3-70b-versatile',
     temperature: 0,
   });
 
