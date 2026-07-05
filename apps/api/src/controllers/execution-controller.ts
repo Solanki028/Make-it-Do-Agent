@@ -83,6 +83,7 @@ export async function registerExecutionRoutes(fastify: FastifyInstance) {
 
 // Background agent execution wrapper
 async function runAgentGraph(executionId: string, goal: string) {
+  // 1. Log initial execution step in Database
   await prisma.executionStep.create({
     data: {
       taskGoalId: executionId,
@@ -92,14 +93,9 @@ async function runAgentGraph(executionId: string, goal: string) {
     },
   });
 
-  streamManager.sendEvent(executionId, 'plan_created', {
-    message: 'Analyzing goal...',
-    plan: ['Understand goal', 'Query tools', 'Execute plan', 'Verify result'],
-  });
-
   const initialState = {
     goal,
-    plan: ['Understand goal', 'Query tools', 'Execute plan', 'Verify result'],
+    plan: [],
     currentStepIndex: 0,
     messages: [],
     trace: [
@@ -118,22 +114,116 @@ async function runAgentGraph(executionId: string, goal: string) {
     metrics: { promptTokens: 0, completionTokens: 0, totalCost: 0 },
   };
 
-  streamManager.sendEvent(executionId, 'reasoning_chunk', {
-    chunk: 'Planner node started. Initiating search pattern...\n',
-  });
+  try {
+    // 2. Execute LangGraph in Streaming mode
+    const stream = await graph.stream(initialState, {
+      streamMode: 'updates',
+    });
 
-  const result = await graph.invoke(initialState);
+    let stepOrder = 1;
 
-  await prisma.taskGoal.update({
-    where: { id: executionId },
-    data: {
-      status: result.consecutiveFailures > 3 ? 'FAILED' : 'COMPLETED',
-      endedAt: new Date(),
-    },
-  });
+    for await (const chunk of stream) {
+      // Extract active node changes
+      const nodeName = Object.keys(chunk)[0];
+      const updates = chunk[nodeName];
 
-  streamManager.sendEvent(executionId, 'task_completed', {
-    status: 'completed',
-    result: 'Task finished successfully.',
-  });
+      console.log(`[Stream Event] Completed node: ${nodeName}`);
+
+      // 3. Persist step logs in Database
+      let logsContent = `Node ${nodeName} execution finished.`;
+      if (updates.trace && updates.trace.length > 0) {
+        logsContent = updates.trace[updates.trace.length - 1].message;
+      }
+
+      const dbStep = await prisma.executionStep.create({
+        data: {
+          taskGoalId: executionId,
+          nodeName: nodeName,
+          logs: logsContent,
+          stepOrder: stepOrder++,
+        },
+      });
+
+      // 4. Log tool calls and dispatch client streams
+      if (updates.trace && updates.trace.length > 0) {
+        const latestTrace = updates.trace[updates.trace.length - 1];
+        if (latestTrace.toolCalls && latestTrace.toolCalls.length > 0) {
+          for (const tc of latestTrace.toolCalls) {
+            await prisma.toolCall.create({
+              data: {
+                executionStepId: dbStep.id,
+                serverName: tc.server,
+                toolName: tc.tool,
+                arguments: tc.arguments,
+                result: tc.output ? tc.output : null,
+                status: tc.status === 'success' ? 'SUCCESS' : 'FAILED',
+                errorMessage: tc.error || null,
+                durationMs: 0,
+              },
+            });
+
+            streamManager.sendEvent(executionId, 'tool_start', {
+              serverName: tc.server,
+              toolName: tc.tool,
+              args: tc.arguments,
+            });
+
+            streamManager.sendEvent(executionId, 'tool_end', {
+              status: tc.status,
+              result: tc.output,
+              error: tc.error,
+            });
+          }
+        }
+      }
+
+      // 5. Stream plan and reasoning events
+      if (nodeName === 'planner') {
+        if (updates.plan) {
+          streamManager.sendEvent(executionId, 'plan_created', {
+            message: 'Planner updated the roadmap.',
+            plan: updates.plan,
+          });
+        }
+        if (updates.trace && updates.trace.length > 0) {
+          const reasoning = updates.trace[updates.trace.length - 1].message;
+          streamManager.sendEvent(executionId, 'reasoning_chunk', {
+            chunk: reasoning + '\n',
+          });
+        }
+      } else {
+        streamManager.sendEvent(executionId, 'reasoning_chunk', {
+          chunk: `Finished node: ${nodeName}. ${logsContent}\n`,
+        });
+      }
+    }
+
+    // 6. Mark goal complete
+    await prisma.taskGoal.update({
+      where: { id: executionId },
+      data: {
+        status: 'COMPLETED',
+        endedAt: new Date(),
+      },
+    });
+
+    streamManager.sendEvent(executionId, 'task_completed', {
+      status: 'completed',
+      result: 'Goal completed successfully.',
+    });
+
+  } catch (err: any) {
+    console.error('Error during streaming graph execution:', err);
+    await prisma.taskGoal.update({
+      where: { id: executionId },
+      data: {
+        status: 'FAILED',
+        endedAt: new Date(),
+      },
+    });
+
+    streamManager.sendEvent(executionId, 'error', {
+      message: err.message || 'An error occurred during agent execution.',
+    });
+  }
 }
