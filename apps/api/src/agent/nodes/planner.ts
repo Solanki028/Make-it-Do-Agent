@@ -1,8 +1,59 @@
-import { ChatGroq } from '@langchain/groq';
 import { env } from '../../config/env.js';
 import { AgentState } from '../state.js';
 import { mcpClientManager } from '../../mcp/client-manager.js';
-import { HumanMessage, SystemMessage } from '@langchain/core/messages';
+import { HumanMessage, SystemMessage, BaseMessage } from '@langchain/core/messages';
+
+class CustomChatGroq {
+  private apiKey: string;
+  private model: string;
+  private temperature: number;
+
+  constructor(fields: { apiKey: string; model?: string; temperature?: number }) {
+    this.apiKey = fields.apiKey;
+    this.model = fields.model || 'llama-3.3-70b-versatile';
+    this.temperature = fields.temperature ?? 0;
+  }
+
+  async invoke(messages: BaseMessage[]): Promise<{ content: string }> {
+    const apiMessages = messages.map((m) => {
+      let role = 'user';
+      const type = m._getType();
+      if (type === 'system') {
+        role = 'system';
+      } else if (type === 'ai') {
+        role = 'assistant';
+      } else if (type === 'tool') {
+        role = 'tool';
+      }
+      return {
+        role,
+        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+      };
+    });
+
+    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: this.model,
+        messages: apiMessages,
+        temperature: this.temperature,
+      }),
+    });
+
+    if (!response.ok) {
+      const errBody = await response.text();
+      throw new Error(`Groq API returned HTTP ${response.status}: ${errBody}`);
+    }
+
+    const data = (await response.json()) as any;
+    const content = data.choices?.[0]?.message?.content || '';
+    return { content };
+  }
+}
 
 export async function plannerNode(state: AgentState): Promise<Partial<AgentState>> {
   console.log('--- ENTERING PLANNER NODE ---');
@@ -32,7 +83,7 @@ export async function plannerNode(state: AgentState): Promise<Partial<AgentState
     }
   }
 
-  const model = new ChatGroq({
+  const model = new CustomChatGroq({
     apiKey: env.GROQ_API_KEY,
     model: 'llama-3.3-70b-versatile',
     temperature: 0,

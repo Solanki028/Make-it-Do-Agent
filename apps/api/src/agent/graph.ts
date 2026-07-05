@@ -31,6 +31,13 @@ function routeAfterEvaluator(state: AgentState): typeof END | 'planner' {
   return 'planner';
 }
 
+function routeAfterExecutor(state: AgentState): 'evaluator' | 'recovery' {
+  if (state.consecutiveFailures > 0) {
+    return 'recovery';
+  }
+  return 'evaluator';
+}
+
 // Build the Graph
 const workflow = new StateGraph<AgentState>({
   channels: agentStateChannels,
@@ -49,7 +56,10 @@ const workflow = new StateGraph<AgentState>({
     evaluator: 'evaluator',
   })
   
-  .addEdge('executor', 'evaluator')
+  .addConditionalEdges('executor', routeAfterExecutor, {
+    evaluator: 'evaluator',
+    recovery: 'recovery',
+  })
   .addEdge('recovery', 'planner')
   .addEdge('human_gate', 'planner')
   
