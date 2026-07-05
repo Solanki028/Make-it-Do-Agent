@@ -1,0 +1,16 @@
+{
+  "name": "make-it-do-agent",
+  "version": "1.0.0",
+  "description": "An agentic host application that dynamically connects to MCP servers",
+  "private": true,
+  "workspaces": [
+    "apps/api",
+    "apps/web"
+  ],
+  "scripts": {
+    "api:dev": "npm run dev --workspace=apps/api",
+    "web:dev": "npm run dev --workspace=apps/web",
+    "build": "npm run build --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  }
+}
