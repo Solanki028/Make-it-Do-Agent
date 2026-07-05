@@ -28,6 +28,7 @@ interface AgentStore {
   isStreaming: boolean;
   error: string | null;
   eventSource: EventSource | null;
+  conversations: any[];
 
   setConversationId: (id: string | null) => void;
   setExecutionId: (id: string | null) => void;
@@ -35,6 +36,8 @@ interface AgentStore {
   startExecution: (goal: string) => Promise<void>;
   stopExecution: () => void;
   reset: () => void;
+  loadConversations: () => Promise<void>;
+  loadExecutionHistory: (executionId: string, goalText: string) => Promise<void>;
 }
 
 const API_BASE_URL = 'http://localhost:4000';
@@ -49,6 +52,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   isStreaming: false,
   error: null,
   eventSource: null,
+  conversations: [],
 
   setConversationId: (id) => set({ conversationId: id }),
   setExecutionId: (id) => set({ executionId: id }),
@@ -92,6 +96,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       const { executionId, conversationId } = data;
 
       set({ executionId, conversationId });
+      get().loadConversations(); // Update list
 
       set((state) => ({
         steps: state.steps.map((s) =>
@@ -251,5 +256,62 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
       isStreaming: false,
       error: null,
     });
+  },
+
+  loadConversations: async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/conversations`);
+      if (response.ok) {
+        const data = await response.json();
+        set({ conversations: data });
+      }
+    } catch (err) {
+      console.error('Failed to fetch conversations:', err);
+    }
+  },
+
+  loadExecutionHistory: async (executionId, goalText) => {
+    get().stopExecution();
+    set({
+      executionId,
+      activeGoal: goalText,
+      isStreaming: false,
+      error: null,
+      plan: [],
+      steps: [
+        {
+          id: 'loading',
+          nodeName: 'history',
+          timestamp: new Date().toISOString(),
+          message: 'Loading historical trace steps...',
+          status: 'running',
+        },
+      ],
+    });
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/executions/${executionId}`);
+      if (!response.ok) {
+        throw new Error(`Server returned HTTP ${response.status}`);
+      }
+      const data = await response.json();
+      set({
+        steps: data,
+        plan: data.find((s: any) => s.nodeName === 'planner')?.message?.split(' Plan established: ')[1]?.split(' → ') || [],
+      });
+    } catch (err: any) {
+      set({
+        error: err.message || 'Failed to load execution history.',
+        steps: [
+          {
+            id: 'error',
+            nodeName: 'history',
+            timestamp: new Date().toISOString(),
+            message: 'Failed to load trace: ' + err.message,
+            status: 'failed',
+          },
+        ],
+      });
+    }
   },
 }));

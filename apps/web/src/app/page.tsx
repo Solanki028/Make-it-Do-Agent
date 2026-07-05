@@ -14,8 +14,13 @@ export default function Home() {
 
   const { 
     startExecution, stopExecution, reset, 
-    isStreaming, plan, steps, error, activeGoal, executionId 
+    isStreaming, plan, steps, error, activeGoal, executionId,
+    conversations, loadConversations, loadExecutionHistory 
   } = useAgentStore();
+
+  useEffect(() => {
+    loadConversations();
+  }, []);
 
   const handleStart = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -83,14 +88,29 @@ export default function Home() {
             <History className="h-4 w-4 text-indigo-400" /> Goal History
           </h2>
           <div className="space-y-1">
-            {activeGoal && (
-              <button className="w-full text-left p-3 rounded-lg bg-indigo-500/10 border border-indigo-500/20 text-indigo-200 text-sm font-medium truncate">
-                {activeGoal}
-              </button>
+            {conversations.map((conv: any) => {
+              const latestTask = conv.tasks?.[0];
+              if (!latestTask) return null;
+              const isSelected = executionId === latestTask.id;
+              return (
+                <button 
+                  key={conv.id}
+                  onClick={() => loadExecutionHistory(latestTask.id, latestTask.originalGoal)}
+                  className={`w-full text-left p-3 rounded-lg border text-xs font-medium truncate transition-all block ${
+                    isSelected 
+                      ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-200' 
+                      : 'bg-zinc-800/20 border-zinc-800 hover:bg-zinc-800/40 text-zinc-300'
+                  }`}
+                >
+                  {latestTask.originalGoal}
+                </button>
+              );
+            })}
+            {conversations.length === 0 && (
+              <div className="p-3 text-center text-xs text-zinc-500 italic">
+                No historical runs found
+              </div>
             )}
-            <div className="p-3 text-center text-xs text-zinc-500 italic">
-              No historical runs found
-            </div>
           </div>
         </div>
 
