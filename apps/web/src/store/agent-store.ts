@@ -1,0 +1,255 @@
+import { create } from 'zustand';
+
+export interface TraceStep {
+  id: string;
+  nodeName: string;
+  timestamp: string;
+  message: string;
+  status: 'pending' | 'running' | 'success' | 'failed';
+  details?: Record<string, any>;
+  reasoning?: string;
+  toolCalls?: {
+    server: string;
+    tool: string;
+    arguments: Record<string, any>;
+    status: 'pending' | 'success' | 'failed';
+    output?: any;
+    error?: string;
+  }[];
+}
+
+interface AgentStore {
+  conversationId: string | null;
+  executionId: string | null;
+  activeGoal: string | null;
+  plan: string[];
+  currentStepIndex: number;
+  steps: TraceStep[];
+  isStreaming: boolean;
+  error: string | null;
+  eventSource: EventSource | null;
+
+  setConversationId: (id: string | null) => void;
+  setExecutionId: (id: string | null) => void;
+  setActiveGoal: (goal: string | null) => void;
+  startExecution: (goal: string) => Promise<void>;
+  stopExecution: () => void;
+  reset: () => void;
+}
+
+const API_BASE_URL = 'http://localhost:4000';
+
+export const useAgentStore = create<AgentStore>((set, get) => ({
+  conversationId: null,
+  executionId: null,
+  activeGoal: null,
+  plan: [],
+  currentStepIndex: 0,
+  steps: [],
+  isStreaming: false,
+  error: null,
+  eventSource: null,
+
+  setConversationId: (id) => set({ conversationId: id }),
+  setExecutionId: (id) => set({ executionId: id }),
+  setActiveGoal: (goal) => set({ activeGoal: goal }),
+
+  startExecution: async (goal) => {
+    get().stopExecution();
+
+    set({
+      activeGoal: goal,
+      isStreaming: true,
+      error: null,
+      plan: [],
+      currentStepIndex: 0,
+      steps: [
+        {
+          id: 'init',
+          nodeName: 'init',
+          timestamp: new Date().toISOString(),
+          message: 'Sending goal to server...',
+          status: 'running',
+        },
+      ],
+    });
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/execute`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          goal,
+          conversationId: get().conversationId || undefined,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Server returned HTTP ${response.status}`);
+      }
+
+      const data = await response.json();
+      const { executionId, conversationId } = data;
+
+      set({ executionId, conversationId });
+
+      set((state) => ({
+        steps: state.steps.map((s) =>
+          s.id === 'init' ? { ...s, message: 'Execution initiated. Streaming trace...', status: 'success' } : s
+        ),
+      }));
+
+      const es = new EventSource(`${API_BASE_URL}/api/execute/stream?executionId=${executionId}`);
+      set({ eventSource: es });
+
+      es.addEventListener('plan_created', (e: MessageEvent) => {
+        const payload = JSON.parse(e.data);
+        set({
+          plan: payload.plan || [],
+          steps: [
+            ...get().steps,
+            {
+              id: 'plan',
+              nodeName: 'planner',
+              timestamp: new Date().toISOString(),
+              message: 'Plan established: ' + (payload.plan || []).join(' → '),
+              status: 'success',
+            },
+          ],
+        });
+      });
+
+      es.addEventListener('reasoning_chunk', (e: MessageEvent) => {
+        const payload = JSON.parse(e.data);
+        set((state) => {
+          const steps = [...state.steps];
+          const lastStep = steps[steps.length - 1];
+
+          if (lastStep && lastStep.nodeName === 'reasoning') {
+            lastStep.reasoning = (lastStep.reasoning || '') + payload.chunk;
+          } else {
+            steps.push({
+              id: 'reasoning-' + Date.now(),
+              nodeName: 'reasoning',
+              timestamp: new Date().toISOString(),
+              message: 'Analyzing step and planning tool parameters...',
+              status: 'running',
+              reasoning: payload.chunk,
+            });
+          }
+          return { steps };
+        });
+      });
+
+      es.addEventListener('tool_start', (e: MessageEvent) => {
+        const payload = JSON.parse(e.data);
+        set((state) => {
+          const steps = state.steps.map((s) =>
+            s.nodeName === 'reasoning' && s.status === 'running' ? { ...s, status: 'success' as const } : s
+          );
+          steps.push({
+            id: 'tool-' + Date.now(),
+            nodeName: 'executor',
+            timestamp: new Date().toISOString(),
+            message: `Invoking tool ${payload.toolName} on server ${payload.serverName}`,
+            status: 'running',
+            toolCalls: [
+              {
+                server: payload.serverName,
+                tool: payload.toolName,
+                arguments: payload.args,
+                status: 'pending',
+              },
+            ],
+          });
+          return { steps };
+        });
+      });
+
+      es.addEventListener('tool_end', (e: MessageEvent) => {
+        const payload = JSON.parse(e.data);
+        set((state) => ({
+          steps: state.steps.map((s) => {
+            if (s.nodeName === 'executor' && s.status === 'running') {
+              return {
+                ...s,
+                status: payload.status === 'success' ? 'success' as const : 'failed' as const,
+                message: payload.status === 'success' ? 'Tool execution completed' : 'Tool execution failed',
+                toolCalls: s.toolCalls?.map((tc) => ({
+                  ...tc,
+                  status: payload.status === 'success' ? 'success' as const : 'failed' as const,
+                  output: payload.result,
+                  error: payload.error,
+                })),
+              };
+            }
+            return s;
+          }),
+        }));
+      });
+
+      es.addEventListener('task_completed', (e: MessageEvent) => {
+        const payload = JSON.parse(e.data);
+        set((state) => ({
+          isStreaming: false,
+          steps: [
+            ...state.steps.map((s) => (s.status === 'running' ? { ...s, status: 'success' as const } : s)),
+            {
+              id: 'complete',
+              nodeName: 'evaluator',
+              timestamp: new Date().toISOString(),
+              message: payload.result || 'Task completed successfully!',
+              status: 'success',
+            },
+          ],
+        }));
+        es.close();
+      });
+
+      es.addEventListener('error', (e) => {
+        console.error('SSE Error:', e);
+        set({
+          error: 'Streaming connection interrupted or error from server.',
+          isStreaming: false,
+        });
+        es.close();
+      });
+    } catch (err: any) {
+      set({
+        error: err.message || 'Failed to start task execution.',
+        isStreaming: false,
+        steps: [
+          ...get().steps,
+          {
+            id: 'error',
+            nodeName: 'init',
+            timestamp: new Date().toISOString(),
+            message: 'Failed to initialize execution: ' + err.message,
+            status: 'failed',
+          },
+        ],
+      });
+    }
+  },
+
+  stopExecution: () => {
+    const { eventSource } = get();
+    if (eventSource) {
+      eventSource.close();
+    }
+    set({ isStreaming: false, eventSource: null });
+  },
+
+  reset: () => {
+    get().stopExecution();
+    set({
+      executionId: null,
+      activeGoal: null,
+      plan: [],
+      currentStepIndex: 0,
+      steps: [],
+      isStreaming: false,
+      error: null,
+    });
+  },
+}));
