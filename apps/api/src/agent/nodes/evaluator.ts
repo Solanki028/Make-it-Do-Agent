@@ -71,6 +71,24 @@ Has the goal been fully accomplished? Reply with ONLY the JSON object.`;
 
     console.log(`[Evaluator] goalAchieved=${goalAchieved} — ${reason}`);
 
+    // ── Generate human-readable run summary when goal is achieved ───────────
+    let summary: string | undefined;
+    if (goalAchieved) {
+      try {
+        const summaryResponse = await model.invoke([
+          new SystemMessage('You are a concise reporter. Summarize what the AI agent accomplished in 2-3 sentences. Be specific about what was done, not just that it was done.'),
+          new HumanMessage(
+            `Goal: "${state.goal}"\n\nAgent execution history:\n${executionSummary}\n\nWrite a concise, user-friendly summary of what was accomplished.`
+          ),
+        ]);
+        summary = typeof summaryResponse.content === 'string'
+          ? summaryResponse.content.trim()
+          : undefined;
+      } catch {
+        // Non-fatal — summary is optional
+      }
+    }
+
     return {
       // Signal the graph router: null nextToolCall + goalAchieved=true → END
       nextToolCall: goalAchieved ? undefined : state.nextToolCall,
@@ -82,7 +100,7 @@ Has the goal been fully accomplished? Reply with ONLY the JSON object.`;
           message: goalAchieved
             ? `✅ Goal achieved: ${reason}`
             : `🔄 Continuing: ${reason}`,
-          details: { goalAchieved, reason },
+          details: { goalAchieved, reason, summary },
         },
       ],
     };

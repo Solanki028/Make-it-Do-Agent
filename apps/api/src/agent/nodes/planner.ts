@@ -91,10 +91,48 @@ Based on the goal and execution history, output ONLY a JSON object:
 If the goal is fully accomplished, set "nextToolCall" to null.
 Do NOT wrap your response in markdown. Start with { and end with }.`;
 
-  // ── Build message payload ─────────────────────────────────────────────────
+  // ── Build message payload with rolling summarization ─────────────────────
+  // If history is long (> 10 messages), compress older entries into a summary
+  // to prevent context window overflow on long-running tasks.
+  const MESSAGE_SUMMARY_THRESHOLD = 10;
+  let messagesToProcess = state.messages;
+
+  if (state.messages.length > MESSAGE_SUMMARY_THRESHOLD) {
+    const oldMessages = state.messages.slice(0, state.messages.length - MESSAGE_SUMMARY_THRESHOLD);
+    const recentMessages = state.messages.slice(-MESSAGE_SUMMARY_THRESHOLD);
+
+    const summaryText = oldMessages
+      .map((m) => {
+        const type = m._getType().toUpperCase();
+        const content = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+        return `[${type}]: ${content.slice(0, 200)}`;
+      })
+      .join('\n');
+
+    let compressedSummary = `[HISTORY SUMMARY]: The following ${oldMessages.length} earlier messages have been summarized:\n${summaryText.slice(0, 1500)}`;
+
+    try {
+      const sumResp = await model.invoke([
+        new SystemMessage('Summarize the following agent conversation history in 3-5 sentences, focusing on what tools were used and what results were obtained.'),
+        new HumanMessage(summaryText.slice(0, 3000)),
+      ]);
+      if (typeof sumResp.content === 'string') {
+        compressedSummary = `[HISTORY SUMMARY]: ${sumResp.content.trim()}`;
+      }
+    } catch {
+      // Fall back to raw truncated summary on LLM failure
+    }
+
+    messagesToProcess = [
+      new AIMessage(compressedSummary),
+      ...recentMessages,
+    ];
+    console.log(`[Planner] Compressed ${oldMessages.length} old messages into rolling summary.`);
+  }
+
   const formattedMessages: BaseMessage[] = [new SystemMessage(systemPrompt)];
 
-  for (const m of state.messages) {
+  for (const m of messagesToProcess) {
     const rawContent = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
     const contentText = rawContent.trim() || 'Tool executed successfully, but returned no data.';
 
