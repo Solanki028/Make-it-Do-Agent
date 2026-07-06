@@ -7,7 +7,7 @@ import {
   Play, Sparkles, Server, CheckCircle2, XCircle, Loader2,
   History, Cpu, ChevronDown, ChevronUp, AlertCircle, RefreshCw,
   Square, Zap, Brain, RotateCcw, Menu, X, Clock, Coins,
-  ArrowRight, Terminal, ShieldCheck, TrendingUp, Settings,
+  ArrowRight, Terminal, ShieldCheck, TrendingUp, Settings, Download, FileText,
 } from 'lucide-react';
 
 // ─── Node metadata ────────────────────────────────────────────────────────────
@@ -27,6 +27,59 @@ const EXAMPLE_PROMPTS = [
   'Find all TypeScript files in the src folder',
   'Check what MCP tools are available and list them',
 ];
+
+// ─── Export run as markdown ───────────────────────────────────────────────────
+function exportToMarkdown(
+  goal: string,
+  steps: TraceStep[],
+  summary?: string
+) {
+  const lines: string[] = [
+    `# Make It Do — Run Report`,
+    ``,
+    `**Goal:** ${goal}`,
+    `**Date:** ${new Date().toLocaleString()}`,
+    `**Steps:** ${steps.length}`,
+    ``,
+  ];
+
+  if (summary) {
+    lines.push(`## Summary`, ``, summary, ``);
+  }
+
+  lines.push(`## Execution Trace`, '');
+
+  steps.forEach((step, i) => {
+    const meta = NODE_META[step.nodeName];
+    lines.push(`### Step ${i + 1} — ${meta?.label ?? step.nodeName}`);
+    lines.push(`**Status:** ${step.status}  |  **Time:** ${new Date(step.timestamp).toLocaleTimeString()}`);
+    lines.push(``);
+    lines.push(step.message);
+    if (step.reasoning) {
+      lines.push(``, `**Reasoning:**`, ``, '```', step.reasoning, '```');
+    }
+    step.toolCalls?.forEach((tc) => {
+      lines.push(``, `**Tool:** \`${tc.server}/${tc.tool}\` → ${tc.status}`);
+      if (Object.keys(tc.arguments ?? {}).length) {
+        lines.push('```json', JSON.stringify(tc.arguments, null, 2), '```');
+      }
+      if (tc.output) {
+        const out = typeof tc.output === 'string' ? tc.output : JSON.stringify(tc.output, null, 2);
+        lines.push(`**Output:**`, '```', out.slice(0, 1000), '```');
+      }
+      if (tc.error) lines.push(`**Error:** ${tc.error}`);
+    });
+    lines.push('');
+  });
+
+  const blob = new Blob([lines.join('\n')], { type: 'text/markdown' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href     = url;
+  a.download = `make-it-do-run-${Date.now()}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
@@ -476,6 +529,20 @@ export default function Home() {
           )}
 
           <div className="ml-auto flex items-center gap-2">
+            {/* Export button — visible when run has steps and is not streaming */}
+            {steps.length > 0 && !isStreaming && activeGoal && (
+              <button
+                onClick={() => {
+                  const summary = steps
+                    .find((s) => s.nodeName === 'evaluator' && s.details?.summary)
+                    ?.details?.summary;
+                  exportToMarkdown(activeGoal, steps, summary);
+                }}
+                className="flex items-center gap-1.5 px-3 py-1 rounded-lg bg-zinc-800 border border-zinc-700 text-zinc-400 text-xs font-semibold hover:bg-zinc-700 hover:text-zinc-100 transition-all"
+              >
+                <Download className="h-3 w-3" /> Export
+              </button>
+            )}
             {isStreaming && (
               <button
                 onClick={stopExecution}
@@ -493,18 +560,35 @@ export default function Home() {
           {/* Left pane: Goal input + Goal display */}
           <div className="flex-1 flex flex-col min-w-0 border-r border-[var(--border-subtle)] overflow-y-auto">
 
-            {/* Success flash */}
-            {showSuccess && (
-              <div className="m-4 mb-0 p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-3 animate-success-pop">
-                <div className="h-8 w-8 rounded-full bg-emerald-500/20 flex items-center justify-center">
-                  <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+            {/* Success flash + Summary card */}
+            {showSuccess && (() => {
+              const evalStep = [...steps].reverse().find((s) => s.nodeName === 'evaluator' && s.details?.goalAchieved);
+              const summary  = evalStep?.details?.summary as string | undefined;
+              return (
+                <div className="m-4 mb-0 space-y-3">
+                  {/* Flash banner */}
+                  <div className="p-4 rounded-xl bg-emerald-500/10 border border-emerald-500/20 flex items-center gap-3 animate-success-pop">
+                    <div className="h-8 w-8 rounded-full bg-emerald-500/20 flex items-center justify-center">
+                      <CheckCircle2 className="h-4 w-4 text-emerald-400" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-semibold text-emerald-300">Goal Achieved!</p>
+                      <p className="text-xs text-emerald-400/70">The agent completed your goal successfully.</p>
+                    </div>
+                  </div>
+                  {/* Summary result card */}
+                  {summary && (
+                    <div className="p-4 rounded-xl glass border-indigo-500/20 animate-fade-in">
+                      <div className="flex items-center gap-2 mb-2">
+                        <FileText className="h-3.5 w-3.5 text-indigo-400" />
+                        <span className="text-[10px] font-bold uppercase tracking-widest text-indigo-400">Run Summary</span>
+                      </div>
+                      <p className="text-sm text-zinc-200 leading-relaxed">{summary}</p>
+                    </div>
+                  )}
                 </div>
-                <div>
-                  <p className="text-sm font-semibold text-emerald-300">Goal Achieved!</p>
-                  <p className="text-xs text-emerald-400/70">The agent completed your goal successfully.</p>
-                </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Error banner */}
             {error && (
