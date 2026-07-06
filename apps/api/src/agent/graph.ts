@@ -12,8 +12,14 @@ async function humanGateNode(state: AgentState): Promise<Partial<AgentState>> {
   };
 }
 
-// Router functions for conditional edges
+// ─────────────────────────────────────────────
+// Router: Planner → Executor | HumanGate | Evaluator
+// ─────────────────────────────────────────────
 function routeAfterPlanner(state: AgentState): 'executor' | 'human_gate' | 'evaluator' {
+  // Hard safety: if stepCount already at ceiling, skip straight to evaluation
+  if (state.stepCount >= state.maxSteps) {
+    return 'evaluator';
+  }
   if (state.nextToolCall) {
     return 'executor';
   }
@@ -23,25 +29,53 @@ function routeAfterPlanner(state: AgentState): 'executor' | 'human_gate' | 'eval
   return 'evaluator';
 }
 
+// ─────────────────────────────────────────────
+// Router: Evaluator → END | Planner
+// Decision is driven by the LLM evaluator's verdict written into state.
+// We inspect the last evaluator trace entry for the goalAchieved flag.
+// ─────────────────────────────────────────────
 function routeAfterEvaluator(state: AgentState): typeof END | 'planner' {
-  if (!state.nextToolCall) {
+  // Hard stop: exceeded max steps
+  if (state.stepCount >= state.maxSteps) {
+    console.log('[Router] Max steps reached — terminating.');
     return END;
   }
-  const isGoalMet = state.currentStepIndex >= state.plan.length;
-  if (isGoalMet) {
+
+  // Find the last evaluator trace entry to read its verdict
+  const lastEvalTrace = [...state.trace]
+    .reverse()
+    .find((t) => t.nodeName === 'evaluator');
+
+  const goalAchieved = lastEvalTrace?.details?.goalAchieved === true;
+
+  if (goalAchieved) {
+    console.log('[Router] Goal achieved — routing to END.');
     return END;
   }
+
+  // Safety fallback: if planner explicitly cleared nextToolCall and no eval trace, end
+  if (!state.nextToolCall && !lastEvalTrace) {
+    return END;
+  }
+
+  console.log('[Router] Goal not yet achieved — routing back to planner.');
   return 'planner';
 }
 
+// ─────────────────────────────────────────────
+// Router: Executor → Evaluator | Recovery
+// ─────────────────────────────────────────────
 function routeAfterExecutor(state: AgentState): 'evaluator' | 'recovery' {
-  if (state.consecutiveFailures > 0) {
+  // More than 2 consecutive failures → trigger recovery strategy
+  if (state.consecutiveFailures >= 2) {
     return 'recovery';
   }
   return 'evaluator';
 }
 
-// Build the Graph
+// ─────────────────────────────────────────────
+// Build the LangGraph Workflow
+// ─────────────────────────────────────────────
 const workflow = new StateGraph<AgentState>({
   channels: agentStateChannels,
 })
@@ -50,22 +84,23 @@ const workflow = new StateGraph<AgentState>({
   .addNode('human_gate', humanGateNode)
   .addNode('recovery', recoveryNode)
   .addNode('evaluator', evaluatorNode)
-  
+
   .addEdge(START, 'planner')
-  
+
   .addConditionalEdges('planner', routeAfterPlanner, {
     executor: 'executor',
     human_gate: 'human_gate',
     evaluator: 'evaluator',
   })
-  
+
   .addConditionalEdges('executor', routeAfterExecutor, {
     evaluator: 'evaluator',
     recovery: 'recovery',
   })
+
   .addEdge('recovery', 'planner')
   .addEdge('human_gate', 'planner')
-  
+
   .addConditionalEdges('evaluator', routeAfterEvaluator, {
     [END]: END,
     planner: 'planner',
