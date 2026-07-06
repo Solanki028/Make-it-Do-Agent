@@ -18,6 +18,14 @@ export interface TraceStep {
   }[];
 }
 
+interface PendingApproval {
+  executionId: string;
+  tool: string;
+  server: string;
+  arguments: Record<string, any>;
+  reason: string;
+}
+
 interface AgentStore {
   conversationId: string | null;
   executionId: string | null;
@@ -29,6 +37,7 @@ interface AgentStore {
   error: string | null;
   eventSource: EventSource | null;
   conversations: any[];
+  pendingApproval: PendingApproval | null;
 
   setConversationId: (id: string | null) => void;
   setExecutionId: (id: string | null) => void;
@@ -38,6 +47,7 @@ interface AgentStore {
   reset: () => void;
   loadConversations: () => Promise<void>;
   loadExecutionHistory: (executionId: string, goalText: string) => Promise<void>;
+  approveAction: (approved: boolean) => Promise<void>;
 }
 
 const API_BASE_URL = 'http://localhost:4000';
@@ -53,6 +63,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
   error: null,
   eventSource: null,
   conversations: [],
+  pendingApproval: null,
 
   setConversationId: (id) => set({ conversationId: id }),
   setExecutionId: (id) => set({ executionId: id }),
@@ -193,10 +204,36 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         }));
       });
 
+      es.addEventListener('human_approval_required', (e: MessageEvent) => {
+        const payload = JSON.parse(e.data);
+        // Pause streaming UI — keep SSE open so we can resume after approval
+        set({
+          isStreaming: false,
+          pendingApproval: {
+            executionId: payload.executionId,
+            tool: payload.tool,
+            server: payload.server,
+            arguments: payload.arguments ?? {},
+            reason: payload.reason,
+          },
+          steps: [
+            ...get().steps,
+            {
+              id: 'approval-' + Date.now(),
+              nodeName: 'planner',
+              timestamp: new Date().toISOString(),
+              message: `⏸️ Paused: Waiting for approval to run ${payload.server}/${payload.tool}`,
+              status: 'running' as const,
+            },
+          ],
+        });
+      });
+
       es.addEventListener('task_completed', (e: MessageEvent) => {
         const payload = JSON.parse(e.data);
         set((state) => ({
           isStreaming: false,
+          pendingApproval: null,
           steps: [
             ...state.steps.map((s) => (s.status === 'running' ? { ...s, status: 'success' as const } : s)),
             {
@@ -213,10 +250,11 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
       es.addEventListener('error', (e) => {
         console.error('SSE Error:', e);
-        if (get().isStreaming) {
+        if (get().isStreaming || get().pendingApproval) {
           set({
             error: 'Streaming connection interrupted or error from server.',
             isStreaming: false,
+            pendingApproval: null,
           });
         }
         es.close();
@@ -244,7 +282,35 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
     if (eventSource) {
       eventSource.close();
     }
-    set({ isStreaming: false, eventSource: null });
+    set({ isStreaming: false, eventSource: null, pendingApproval: null });
+  },
+
+  approveAction: async (approved: boolean) => {
+    const { pendingApproval, executionId } = get();
+    if (!pendingApproval || !executionId) return;
+
+    // Clear the card immediately for snappy UX
+    set({ pendingApproval: null, isStreaming: true });
+
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/execute/${executionId}/approve`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ approved }),
+      });
+
+      if (!res.ok) {
+        const d = await res.json();
+        throw new Error(d.error || 'Approval request failed');
+      }
+
+      if (!approved) {
+        set({ isStreaming: false });
+      }
+      // If approved: SSE stream is still open — it will receive reasoning_chunk and task_completed
+    } catch (err: any) {
+      set({ error: err.message, isStreaming: false });
+    }
   },
 
   reset: () => {
