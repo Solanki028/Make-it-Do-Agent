@@ -508,19 +508,16 @@ export default function SettingsPage() {
           </h2>
           <div className="space-y-2 text-xs text-zinc-500">
             <p>
-              <span className="text-zinc-300 font-semibold">Brave Search:</span>{' '}
-              Get a free API key at{' '}
-              <a href="https://brave.com/search/api/" target="_blank" rel="noreferrer" className="text-indigo-400 hover:underline">
-                brave.com/search/api
-              </a>
-              , add it to <code className="text-zinc-400 font-mono">BRAVE_API_KEY</code> in{' '}
-              <code className="text-zinc-400 font-mono">apps/api/.env</code>, then enable the server here.
+              <span className="text-zinc-300 font-semibold">Web Fetch (active):</span>{' '}
+              The <code className="text-zinc-400 font-mono">web-fetch</code> server is already enabled and
+              requires no API key. It lets the agent read any public URL — documentation, GitHub repos,
+              JSON APIs, news articles, and more.
             </p>
             <p>
               <span className="text-zinc-300 font-semibold">GitHub MCP:</span>{' '}
               Your <code className="text-zinc-400 font-mono">GITHUB_TOKEN</code> is already in your{' '}
               <code className="text-zinc-400 font-mono">.env</code>. Enable the GitHub server here to give the agent
-              access to read repos, list PRs, and create issues.
+              access to read repos, list PRs, create issues, and search code.
             </p>
             <p>
               <span className="text-zinc-300 font-semibold">Custom STDIO server:</span>{' '}
