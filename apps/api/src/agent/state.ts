@@ -34,6 +34,14 @@ export interface AgentState {
   loopHistory: Record<string, number>;
   humanInputRequired: boolean;
   humanResponse?: string;
+  // Set by planner when a risky action needs user confirmation before execution
+  pendingApprovalToolCall?: {
+    id: string;
+    server: string;
+    tool: string;
+    arguments: Record<string, any>;
+  };
+  approvalReason?: string; // Why approval is being requested
   metrics: {
     promptTokens: number;
     completionTokens: number;
@@ -87,6 +95,14 @@ export const agentStateChannels = {
     default: () => false,
   },
   humanResponse: {
+    value: (x: string | undefined, y: string | undefined) => y ?? x,
+    default: () => undefined,
+  },
+  pendingApprovalToolCall: {
+    value: (x: any, y: any) => y ?? x,
+    default: () => undefined,
+  },
+  approvalReason: {
     value: (x: string | undefined, y: string | undefined) => y ?? x,
     default: () => undefined,
   },

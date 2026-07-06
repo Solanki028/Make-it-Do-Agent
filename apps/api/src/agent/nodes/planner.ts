@@ -177,10 +177,65 @@ Do NOT wrap your response in markdown. Start with { and end with }.`;
 
       if (callCount >= 3) {
         console.warn(`[Planner] Loop detected! Tool call fingerprint "${fp}" seen ${callCount} times. Aborting tool call to break cycle.`);
-        nextToolCall = null; // Force the evaluator to terminate or the planner to rethink
+        nextToolCall = null;
       }
 
       const updatedLoopHistory = { ...state.loopHistory, [fp]: callCount };
+
+      // ── Risky action detection ─────────────────────────────────────────
+      // If the tool involves destructive or write operations, pause for human approval.
+      const RISKY_TOOLS = [
+        'write_file', 'create_file', 'delete_file', 'move_file', 'rename_file',
+        'edit_file', 'overwrite_file', 'delete_directory', 'remove_file',
+        // GitHub destructive actions
+        'create_pull_request', 'merge_pull_request', 'delete_branch',
+        'push_files', 'create_repository', 'delete_repository',
+        // Filesystem edits
+        'apply_diff', 'patch_file',
+      ];
+      const isRiskyAction = nextToolCall && RISKY_TOOLS.some(
+        (r) => nextToolCall!.tool.toLowerCase().includes(r.replace('_', ''))
+               || nextToolCall!.tool.toLowerCase() === r
+      );
+
+      if (isRiskyAction && nextToolCall) {
+        const argsPreview = JSON.stringify(nextToolCall.arguments, null, 2).slice(0, 400);
+        const approvalReason = `The agent wants to run a potentially destructive action:\n\nTool: ${nextToolCall.server}/${nextToolCall.tool}\n\nArguments:\n${argsPreview}\n\nReasoning: ${result.reasoning || 'No reasoning provided.'}`;
+        console.warn(`[Planner] Risky action detected — requesting human approval for: ${nextToolCall.tool}`);
+
+        return {
+          plan: result.plan,
+          currentStepIndex: result.nextStepIndex,
+          nextToolCall: undefined,                    // DO NOT execute yet
+          humanInputRequired: true,
+          pendingApprovalToolCall: {
+            id: 'tc_' + Date.now(),
+            server: nextToolCall.server,
+            tool: nextToolCall.tool,
+            arguments: nextToolCall.arguments,
+          },
+          approvalReason,
+          stepCount: state.stepCount + 1,
+          loopHistory: updatedLoopHistory,
+          metrics: {
+            promptTokens: (state.metrics?.promptTokens ?? 0) + promptTokens,
+            completionTokens: (state.metrics?.completionTokens ?? 0) + completionTokens,
+            totalCost: parseFloat(((state.metrics?.totalCost ?? 0) + runCost).toFixed(6)),
+          },
+          trace: [{
+            id: 'plan-' + Date.now(),
+            nodeName: 'planner',
+            timestamp: new Date().toISOString(),
+            message: `⏸ Pausing for approval: ${nextToolCall.server}/${nextToolCall.tool}`,
+            details: {
+              humanInputRequired: true,
+              pendingToolCall: nextToolCall,
+              approvalReason,
+              tokens: { promptTokens, completionTokens, runCost },
+            },
+          }],
+        };
+      }
 
       return {
         plan: result.plan,
@@ -191,6 +246,9 @@ Do NOT wrap your response in markdown. Start with { and end with }.`;
           tool: nextToolCall.tool,
           arguments: nextToolCall.arguments,
         } : undefined,
+        humanInputRequired: false,
+        pendingApprovalToolCall: undefined,
+        approvalReason: undefined,
         stepCount: state.stepCount + 1,
         loopHistory: updatedLoopHistory,
         metrics: {

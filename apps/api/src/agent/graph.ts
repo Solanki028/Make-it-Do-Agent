@@ -5,8 +5,14 @@ import { executorNode } from './nodes/executor.js';
 import { evaluatorNode } from './nodes/evaluator.js';
 import { recoveryNode } from './nodes/recovery.js';
 
+// ─────────────────────────────────────────────
+// Human Gate Node — pauses the run, waiting for external /approve call
+// The execution controller will save state to approvalStore and re-run
+// the graph when the user approves or denies.
+// ─────────────────────────────────────────────
 async function humanGateNode(state: AgentState): Promise<Partial<AgentState>> {
-  console.log('--- HUMAN GATE NODE ---');
+  console.log('--- HUMAN GATE NODE — pausing for approval ---');
+  // Just ensure the flag is set; the controller handles the actual pause
   return {
     humanInputRequired: true,
   };
@@ -99,7 +105,7 @@ const workflow = new StateGraph<AgentState>({
   })
 
   .addEdge('recovery', 'planner')
-  .addEdge('human_gate', 'planner')
+  .addEdge('human_gate', END)  // Pause here — /approve endpoint re-runs graph
 
   .addConditionalEdges('evaluator', routeAfterEvaluator, {
     [END]: END,

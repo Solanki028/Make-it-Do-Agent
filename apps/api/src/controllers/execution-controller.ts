@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto';
 import { streamManager } from '../streams/stream-manager.js';
 import { graph } from '../agent/graph.js';
 import { prisma } from '../db/prisma.js';
+import { approvalStore } from '../agent/approval-store.js';
 
 const executeSchema = z.object({
   goal: z.string().min(1),
@@ -80,6 +81,54 @@ export async function registerExecutionRoutes(fastify: FastifyInstance) {
     streamManager.setupSSE(executionId, reply);
   });
 
+  // POST /api/execute/:id/approve — resume or cancel a human-gated run
+  fastify.post('/api/execute/:id/approve', async (req: FastifyRequest, reply: FastifyReply) => {
+    const { id: executionId } = req.params as { id: string };
+    const { approved } = req.body as { approved: boolean };
+
+    const pending = approvalStore.get(executionId);
+    if (!pending) {
+      return reply.status(404).send({ error: 'No pending approval found for this execution.' });
+    }
+
+    approvalStore.delete(executionId);
+
+    if (!approved) {
+      // User denied — cancel the run
+      await prisma.taskGoal.update({
+        where: { id: executionId },
+        data: { status: 'FAILED', endedAt: new Date() },
+      }).catch(console.error);
+
+      streamManager.sendEvent(executionId, 'task_completed', {
+        status: 'cancelled',
+        result: '❌ Action denied by user. Agent run cancelled.',
+      });
+
+      return reply.send({ message: 'Run cancelled.' });
+    }
+
+    // User approved — promote pendingApprovalToolCall → nextToolCall and re-run graph
+    const resumeState = {
+      ...pending.state,
+      humanInputRequired: false,
+      nextToolCall: pending.state.pendingApprovalToolCall,
+      pendingApprovalToolCall: undefined,
+      approvalReason: undefined,
+    };
+
+    streamManager.sendEvent(executionId, 'reasoning_chunk', {
+      chunk: '✅ Action approved by user — resuming execution...\n',
+    });
+
+    // Re-run graph from resumed state in background
+    runAgentGraph(executionId, pending.goal, resumeState).catch((err) => {
+      console.error(`[Approve] Error resuming graph for ${executionId}:`, err);
+    });
+
+    return reply.send({ message: 'Approved — resuming agent execution.' });
+  });
+
   fastify.get('/api/conversations', async (req: FastifyRequest, reply: FastifyReply) => {
     try {
       const conversations = await prisma.conversation.findMany({
@@ -134,18 +183,21 @@ export async function registerExecutionRoutes(fastify: FastifyInstance) {
 }
 
 // Background agent execution wrapper
-async function runAgentGraph(executionId: string, goal: string) {
-  // 1. Log initial execution step in Database
-  await prisma.executionStep.create({
-    data: {
-      taskGoalId: executionId,
-      nodeName: 'init',
-      logs: 'Initializing execution context...',
-      stepOrder: 0,
-    },
-  });
+// resumeState: provided when re-starting after human approval
+async function runAgentGraph(executionId: string, goal: string, resumeState?: any) {
+  // 1. Log initial execution step in Database (skipped on resume)
+  if (!resumeState) {
+    await prisma.executionStep.create({
+      data: {
+        taskGoalId: executionId,
+        nodeName: 'init',
+        logs: 'Initializing execution context...',
+        stepOrder: 0,
+      },
+    });
+  }
 
-  const initialState = {
+  const initialState = resumeState ?? {
     goal,
     plan: [],
     currentStepIndex: 0,
@@ -229,6 +281,45 @@ async function runAgentGraph(executionId: string, goal: string) {
         }
       }
 
+      // ── 5a. Handle human gate — pause for approval ──────────────────────
+      if (nodeName === 'human_gate') {
+        // Capture the full accumulated state by reading the last known state
+        // We use the initialState + updates to reconstruct what the agent planned
+        const pendingCall = updates.pendingApprovalToolCall
+          ?? (initialState as any).pendingApprovalToolCall;
+        const reason = updates.approvalReason
+          ?? (initialState as any).approvalReason
+          ?? 'The agent wants to perform a potentially destructive action.';
+
+        // Save accumulated state snapshot (with pending tool call) to approval store
+        const snapshotState = {
+          ...(initialState as any),
+          pendingApprovalToolCall: pendingCall,
+          approvalReason: reason,
+          humanInputRequired: true,
+          nextToolCall: undefined,
+        };
+        approvalStore.save(executionId, snapshotState, goal);
+
+        // Emit human_approval_required SSE event to frontend
+        streamManager.sendEvent(executionId, 'human_approval_required', {
+          executionId,
+          tool: pendingCall?.tool,
+          server: pendingCall?.server,
+          arguments: pendingCall?.arguments,
+          reason,
+        });
+
+        // Set trigger flag so the completion block knows not to mark as completed
+        if (!(runAgentGraph as any).__humanGateTriggered__) {
+          (runAgentGraph as any).__humanGateTriggered__ = {};
+        }
+        (runAgentGraph as any).__humanGateTriggered__[executionId] = true;
+
+        console.log(`[Controller] Human gate triggered for ${executionId} — pausing.`);
+        break; // Stop consuming the stream — graph already routed to END
+      }
+
       // 5. Stream plan and reasoning events
       if (nodeName === 'planner') {
         if (updates.plan) {
@@ -250,7 +341,21 @@ async function runAgentGraph(executionId: string, goal: string) {
       }
     }
 
-    // 6. Mark goal complete
+    // 6. Check if graph paused for human approval
+    const graphState = await graph.getState({ configurable: { thread_id: executionId } }).catch(() => null);
+    const lastTrace = (initialState as any).trace ?? [];
+    const humanRequired = initialState.humanInputRequired
+      || lastTrace.some((t: any) => t.details?.humanInputRequired === true);
+
+    // Detect humanInputRequired from stream output by checking the last streamed chunk
+    // We track this via a flag set during streaming below
+    if ((runAgentGraph as any).__humanGateTriggered__?.[executionId]) {
+      delete (runAgentGraph as any).__humanGateTriggered__[executionId];
+      // SSE and approvalStore already handled in streaming loop — just return
+      return;
+    }
+
+    // 7. Mark goal complete
     await prisma.taskGoal.update({
       where: { id: executionId },
       data: {
