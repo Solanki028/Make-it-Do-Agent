@@ -1,12 +1,13 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import Link from 'next/link';
 import { useAgentStore, TraceStep } from '@/store/agent-store';
 import {
   Play, Sparkles, Server, CheckCircle2, XCircle, Loader2,
   History, Cpu, ChevronDown, ChevronUp, AlertCircle, RefreshCw,
   Square, Zap, Brain, RotateCcw, Menu, X, Clock, Coins,
-  ArrowRight, Terminal, ShieldCheck, TrendingUp,
+  ArrowRight, Terminal, ShieldCheck, TrendingUp, Settings,
 } from 'lucide-react';
 
 // ─── Node metadata ────────────────────────────────────────────────────────────
@@ -405,8 +406,15 @@ export default function Home() {
       </div>
 
       {/* Footer */}
-      <div className="p-4 border-t border-[var(--border-subtle)]">
-        <div className="flex items-center gap-2">
+      <div className="p-4 border-t border-[var(--border-subtle)] space-y-2">
+        <Link
+          href="/settings"
+          className="flex items-center gap-2 px-3 py-2 rounded-lg text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 transition-all text-xs"
+        >
+          <Settings className="h-3.5 w-3.5" />
+          MCP Server Settings
+        </Link>
+        <div className="flex items-center gap-2 px-1">
           <div className="h-2 w-2 rounded-full bg-emerald-400" />
           <span className="text-[10px] text-zinc-500">gpt-4o-mini · GitHub Models</span>
         </div>
