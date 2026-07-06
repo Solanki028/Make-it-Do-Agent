@@ -24,7 +24,10 @@ function routeAfterPlanner(state: AgentState): 'executor' | 'human_gate' | 'eval
 }
 
 function routeAfterEvaluator(state: AgentState): typeof END | 'planner' {
-  const isGoalMet = state.currentStepIndex >= state.plan.length && state.plan.length > 0;
+  if (!state.nextToolCall) {
+    return END;
+  }
+  const isGoalMet = state.currentStepIndex >= state.plan.length;
   if (isGoalMet) {
     return END;
   }

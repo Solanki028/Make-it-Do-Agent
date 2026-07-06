@@ -1,65 +1,15 @@
 import { env } from '../../config/env.js';
 import { AgentState } from '../state.js';
 import { mcpClientManager } from '../../mcp/client-manager.js';
-import { HumanMessage, SystemMessage, BaseMessage } from '@langchain/core/messages';
-
-class CustomChatGroq {
-  private apiKey: string;
-  private model: string;
-  private temperature: number;
-
-  constructor(fields: { apiKey: string; model?: string; temperature?: number }) {
-    this.apiKey = fields.apiKey;
-    this.model = fields.model || 'llama-3.3-70b-versatile';
-    this.temperature = fields.temperature ?? 0;
-  }
-
-  async invoke(messages: BaseMessage[]): Promise<{ content: string }> {
-    const apiMessages = messages.map((m) => {
-      let role = 'user';
-      const type = m._getType();
-      if (type === 'system') {
-        role = 'system';
-      } else if (type === 'ai') {
-        role = 'assistant';
-      } else if (type === 'tool') {
-        role = 'tool';
-      }
-      return {
-        role,
-        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-      };
-    });
-
-    const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model: this.model,
-        messages: apiMessages,
-        temperature: this.temperature,
-      }),
-    });
-
-    if (!response.ok) {
-      const errBody = await response.text();
-      throw new Error(`Groq API returned HTTP ${response.status}: ${errBody}`);
-    }
-
-    const data = (await response.json()) as any;
-    const content = data.choices?.[0]?.message?.content || '';
-    return { content };
-  }
-}
+import { HumanMessage, SystemMessage, AIMessage, ToolMessage, BaseMessage } from '@langchain/core/messages';
+import { CustomChatClient } from '../llm-client.js';
 
 export async function plannerNode(state: AgentState): Promise<Partial<AgentState>> {
   console.log('--- ENTERING PLANNER NODE ---');
 
-  if (!env.GROQ_API_KEY) {
-    console.warn('GROQ_API_KEY is missing! Using Mock Planner Output.');
+  const hasKey = !!env.GITHUB_TOKEN || !!process.env.GITHUB_TOKEN;
+  if (!hasKey) {
+    console.warn('GITHUB_TOKEN is missing! Using Mock Planner Output.');
     const mockPlan = ['Analyze workspace', 'Mock list directory content', 'Produce report'];
     
     if (state.stepCount === 0) {
@@ -83,9 +33,7 @@ export async function plannerNode(state: AgentState): Promise<Partial<AgentState
     }
   }
 
-  const model = new CustomChatGroq({
-    apiKey: env.GROQ_API_KEY,
-    model: 'llama-3.3-70b-versatile',
+  const model = new CustomChatClient({
     temperature: 0,
   });
 
@@ -121,15 +69,40 @@ Based on the goal and execution history, you must output a JSON structure:
 If the goal is fully accomplished, set "nextToolCall" to null.
 Ensure your response is valid JSON.`;
 
-  const response = await model.invoke([
-    new SystemMessage(systemPrompt),
-    ...state.messages.map(m => new HumanMessage(typeof m.content === 'string' ? m.content : JSON.stringify(m.content)))
-  ]);
+  const formattedMessages: BaseMessage[] = [
+    new SystemMessage(systemPrompt)
+  ];
+
+  for (const m of state.messages) {
+    const rawContent = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
+    const contentText = rawContent.trim() || "Tool executed successfully, but returned no data.";
+
+    if (m._getType() === 'tool') {
+      formattedMessages.push(new ToolMessage({
+        content: contentText,
+        name: (m as ToolMessage).name || 'mcp_tool',
+        tool_call_id: (m as ToolMessage).tool_call_id || 'tc_call',
+      }));
+    } else if (m._getType() === 'ai') {
+      formattedMessages.push(new AIMessage(contentText));
+    } else {
+      const promptText = contentText || "Please determine the next step.";
+      formattedMessages.push(new HumanMessage(promptText));
+    }
+  }
+
+  // Ensure there is at least one HumanMessage turn at the end if history is empty
+  if (formattedMessages.length === 1) {
+    const promptText = state.goal.trim() || "Please determine the next step.";
+    formattedMessages.push(new HumanMessage(promptText));
+  }
+
+  const response = await model.invoke(formattedMessages);
 
   try {
     const text = typeof response.content === 'string' ? response.content : '';
-    const jsonStr = text.replace(/```json/g, '').replace(/```/g, '').trim();
-    const result = JSON.parse(jsonStr);
+    const cleanJson = text.replace(/```json\n?|```/g, '').trim();
+    const result = JSON.parse(cleanJson);
 
     return {
       plan: result.plan,

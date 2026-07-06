@@ -34,6 +34,10 @@ export async function executorNode(state: AgentState): Promise<Partial<AgentStat
       }
     }
 
+    if (!resultStr || resultStr.trim() === '') {
+      resultStr = "Tool executed successfully, but returned no data.";
+    }
+
     const traceStep = {
       id: 'exec-' + Date.now(),
       nodeName: 'executor',
