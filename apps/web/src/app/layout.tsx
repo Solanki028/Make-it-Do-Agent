@@ -1,33 +1,39 @@
-import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
-import "./globals.css";
+import type { Metadata } from 'next';
+import { Inter, Geist_Mono } from 'next/font/google';
+import './globals.css';
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
+const inter = Inter({
+  variable: '--font-inter',
+  subsets: ['latin'],
+  display: 'swap',
 });
 
 const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
+  variable: '--font-geist-mono',
+  subsets: ['latin'],
+  display: 'swap',
 });
 
 export const metadata: Metadata = {
-  title: "Make It Do - Dynamic Agent Host",
-  description: "A production-grade agentic host application powered by LangGraph, LangChain, and Model Context Protocol.",
+  title: 'Make It Do — AI Agent Host',
+  description: 'A production-grade agentic host powered by LangGraph, gpt-4o-mini, and the Model Context Protocol. Describe any goal and watch it get done.',
+  keywords: ['AI agent', 'LangGraph', 'MCP', 'automation', 'gpt-4o-mini'],
+  openGraph: {
+    title: 'Make It Do — AI Agent Host',
+    description: 'Describe any goal. Watch it get done.',
+    type: 'website',
+  },
 };
 
 export default function RootLayout({
   children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+}: Readonly<{ children: React.ReactNode }>) {
   return (
     <html
       lang="en"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${inter.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="h-full flex flex-col">{children}</body>
     </html>
   );
 }
