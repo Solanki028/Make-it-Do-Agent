@@ -85,7 +85,7 @@ export function mcpToolToLangChain(
   return new DynamicStructuredTool({
     name: namespacedName,
     description: tool.description || `Execute tool ${tool.name} on server ${serverName}`,
-    schema: zodSchema,
+    schema: zodSchema as z.ZodObject<any>,
     func: async (args) => {
       console.log(`Executing LangChain tool: ${namespacedName} with args:`, args);
       try {

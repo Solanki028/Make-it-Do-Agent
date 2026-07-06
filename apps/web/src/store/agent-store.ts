@@ -114,7 +114,7 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
           steps: [
             ...get().steps,
             {
-              id: 'plan',
+              id: 'plan-' + Date.now(),
               nodeName: 'planner',
               timestamp: new Date().toISOString(),
               message: 'Plan established: ' + (payload.plan || []).join(' → '),
@@ -213,10 +213,12 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
 
       es.addEventListener('error', (e) => {
         console.error('SSE Error:', e);
-        set({
-          error: 'Streaming connection interrupted or error from server.',
-          isStreaming: false,
-        });
+        if (get().isStreaming) {
+          set({
+            error: 'Streaming connection interrupted or error from server.',
+            isStreaming: false,
+          });
+        }
         es.close();
       });
     } catch (err: any) {

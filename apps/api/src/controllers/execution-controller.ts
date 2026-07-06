@@ -79,6 +79,58 @@ export async function registerExecutionRoutes(fastify: FastifyInstance) {
 
     streamManager.setupSSE(executionId, reply);
   });
+
+  fastify.get('/api/conversations', async (req: FastifyRequest, reply: FastifyReply) => {
+    try {
+      const conversations = await prisma.conversation.findMany({
+        orderBy: { createdAt: 'desc' },
+        include: {
+          tasks: {
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+          }
+        }
+      });
+      return conversations;
+    } catch (err: any) {
+      return reply.status(500).send({ error: 'Failed to fetch conversations', message: err.message });
+    }
+  });
+
+  fastify.get('/api/executions/:executionId', async (req: FastifyRequest, reply: FastifyReply) => {
+    const { executionId } = req.params as { executionId: string };
+    try {
+      const steps = await prisma.executionStep.findMany({
+        where: { taskGoalId: executionId },
+        orderBy: { stepOrder: 'asc' },
+        include: {
+          toolCalls: true,
+        }
+      });
+
+      const formattedSteps = steps.map(s => {
+        return {
+          id: s.id,
+          nodeName: s.nodeName,
+          timestamp: s.timestamp.toISOString(),
+          message: s.logs,
+          status: 'success' as const,
+          toolCalls: s.toolCalls.map(tc => ({
+            server: tc.serverName,
+            tool: tc.toolName,
+            arguments: tc.arguments as Record<string, any>,
+            status: tc.status === 'SUCCESS' ? 'success' as const : 'failed' as const,
+            output: tc.result,
+            error: tc.errorMessage || undefined,
+          }))
+        };
+      });
+
+      return formattedSteps;
+    } catch (err: any) {
+      return reply.status(500).send({ error: 'Failed to fetch execution history', message: err.message });
+    }
+  });
 }
 
 // Background agent execution wrapper
