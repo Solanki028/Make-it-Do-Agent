@@ -102,9 +102,11 @@ function ServerCard({
         <div className="flex items-center gap-1.5 shrink-0">
           {server.isConnected
             ? <><div className="h-2 w-2 rounded-full bg-emerald-400 animate-pulse" /><span className="text-xs text-emerald-400 font-semibold">Live</span></>
-            : server.isEnabled
-              ? <><div className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" /><span className="text-xs text-amber-400 font-semibold">Connecting</span></>
-              : <><div className="h-2 w-2 rounded-full bg-zinc-600" /><span className="text-xs text-zinc-500">Disabled</span></>
+            : togglingId
+              ? <><Loader2 className="h-3 w-3 animate-spin text-amber-400" /><span className="text-xs text-amber-400 font-semibold">Connecting…</span></>
+              : server.isEnabled
+                ? <><div className="h-2 w-2 rounded-full bg-rose-500" /><span className="text-xs text-rose-400 font-semibold">Disconnected</span></>
+                : <><div className="h-2 w-2 rounded-full bg-zinc-600" /><span className="text-xs text-zinc-500">Disabled</span></>
           }
         </div>
 

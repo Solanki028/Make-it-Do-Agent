@@ -43,24 +43,24 @@ async function main() {
   });
   console.log(' MCP registered: local-filesystem');
 
-  // ── 4. MCP: Web Fetch (free, no API key required) ─────────────────────
-  // Gives the agent the ability to fetch any public URL and read its content.
-  // Completely free — no API key needed.
+  // ── 4. MCP: Puppeteer (free browser-based web access, no API key required) ─
+  // Gives the agent a real headless Chromium browser to navigate and read web pages.
+  // Uses @modelcontextprotocol/server-puppeteer which is published on npm.
+  // Set isEnabled: false — requires Chromium to be installed. Enable from Settings.
   await prisma.mCPConfig.upsert({
-    where: { name: 'web-fetch' },
+    where: { name: 'puppeteer' },
     update: {
-      connectionString: JSON.stringify(['npx', '-y', '@modelcontextprotocol/server-fetch']),
-      isEnabled: true,
+      connectionString: JSON.stringify(['npx', '-y', '@modelcontextprotocol/server-puppeteer']),
     },
     create: {
-      name: 'web-fetch',
+      name: 'puppeteer',
       transportType: 'STDIO',
-      connectionString: JSON.stringify(['npx', '-y', '@modelcontextprotocol/server-fetch']),
+      connectionString: JSON.stringify(['npx', '-y', '@modelcontextprotocol/server-puppeteer']),
       envVariables: {},
-      isEnabled: true,
+      isEnabled: false, // Enable once you confirm Chromium is available
     },
   });
-  console.log(' MCP registered: web-fetch (enabled — fetch any public URL, no API key needed)');
+  console.log(' MCP registered: puppeteer (disabled — enable from Settings for browser-based web access)');
 
   // ── 5. MCP: GitHub ─────────────────────────────────────────────────────
   // Requires GITHUB_PERSONAL_ACCESS_TOKEN env variable.
