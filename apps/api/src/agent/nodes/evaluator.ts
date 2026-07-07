@@ -34,9 +34,28 @@ export async function evaluatorNode(state: AgentState): Promise<Partial<AgentSta
     };
   }
 
-  // Build execution summary from trace history for the LLM to assess
+  // Build detailed execution summary from trace history for the LLM to assess
   const executionSummary = state.trace
-    .map((t) => `[${t.nodeName.toUpperCase()}] ${t.message}`)
+    .map((t) => {
+      let str = `[${t.nodeName.toUpperCase()}] ${t.message}`;
+      if (t.toolCalls && t.toolCalls.length > 0) {
+        t.toolCalls.forEach((tc) => {
+          str += `\n  - Tool Call: ${tc.server}__${tc.tool} -> status: ${tc.status}`;
+          if (tc.arguments && Object.keys(tc.arguments).length > 0) {
+            str += `\n    Arguments: ${JSON.stringify(tc.arguments)}`;
+          }
+          if (tc.output) {
+            // Include a snippet of the tool output (first 800 chars) to prevent context bloat
+            const truncatedOutput = typeof tc.output === 'string' ? tc.output : JSON.stringify(tc.output);
+            str += `\n    Output: ${truncatedOutput.slice(0, 800)}`;
+          }
+          if (tc.error) {
+            str += `\n    Error: ${tc.error}`;
+          }
+        });
+      }
+      return str;
+    })
     .join('\n');
 
   const model = new CustomChatClient({ temperature: 0 });

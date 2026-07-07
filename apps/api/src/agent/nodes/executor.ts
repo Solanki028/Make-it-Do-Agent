@@ -24,6 +24,8 @@ export async function executorNode(state: AgentState): Promise<Partial<AgentStat
       });
     } else {
       const response = await mcpClientManager.executeTool(server, tool, args);
+      const isMcpError = response.isError === true;
+      
       if (response.content && Array.isArray(response.content)) {
         const texts = response.content
           .filter((c: any) => c.type === 'text')
@@ -32,11 +34,25 @@ export async function executorNode(state: AgentState): Promise<Partial<AgentStat
       } else {
         resultStr = JSON.stringify(response);
       }
+
+      if (isMcpError) {
+        throw new Error(resultStr || 'MCP tool execution failed.');
+      }
     }
 
     if (!resultStr || resultStr.trim() === '') {
       resultStr = "Tool executed successfully, but returned no data.";
     }
+
+    // ── Truncate output sent to the LLM ───────────────────────────────────
+    // Large file reads (e.g. .env, big JSON) blow past gpt-4o-mini's 8k limit.
+    // The full content is stored in trace for the UI; the LLM gets a trimmed version.
+    const MAX_LLM_OUTPUT_CHARS = 3000;
+    const fullOutput = resultStr;
+    const llmOutput = resultStr.length > MAX_LLM_OUTPUT_CHARS
+      ? resultStr.slice(0, MAX_LLM_OUTPUT_CHARS)
+        + `\n\n[...output truncated — ${resultStr.length - MAX_LLM_OUTPUT_CHARS} more chars not shown to save tokens. Full content is available above.]`
+      : resultStr;
 
     const traceStep = {
       id: 'exec-' + Date.now(),
@@ -49,13 +65,13 @@ export async function executorNode(state: AgentState): Promise<Partial<AgentStat
           tool,
           arguments: args,
           status: 'success' as const,
-          output: resultStr,
+          output: fullOutput,  // Full output shown in UI
         },
       ],
     };
 
     const toolMsg = new ToolMessage({
-      content: resultStr,
+      content: llmOutput,       // Truncated output sent to LLM
       name: `${server}__${tool}`,
       tool_call_id: id,
     });

@@ -131,7 +131,7 @@ interface GoalInputProps {
   onSubmit: (e: React.FormEvent) => void;
   isStreaming: boolean;
   activeGoal: string | null;
-  textareaRef: React.RefObject<HTMLTextAreaElement>;
+  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
 }
 
 export function GoalInput({ value, onChange, onSubmit, isStreaming, activeGoal, textareaRef }: GoalInputProps) {
@@ -142,64 +142,66 @@ export function GoalInput({ value, onChange, onSubmit, isStreaming, activeGoal, 
 
   return (
     <div className="p-4 border-t border-[var(--border-subtle)] bg-[var(--bg-surface)]/60 backdrop-blur-sm">
-      {/* Quick prompt chips */}
-      {activeGoal && !isStreaming && (
-        <div className="flex flex-wrap gap-1.5 mb-3">
-          {EXAMPLE_PROMPTS.slice(0, 2).map((p) => (
-            <button
-              key={p}
-              onClick={() => handleChipClick(p)}
-              className="flex items-center gap-1 px-2.5 py-1 rounded-full border border-[var(--border-subtle)] text-[10px] text-zinc-500 hover:text-zinc-200 hover:border-[var(--border-default)] transition-all"
-            >
-              <ArrowRight className="h-2.5 w-2.5" />{p}
-            </button>
-          ))}
-        </div>
-      )}
-
-      <form onSubmit={onSubmit} className="relative">
-        <div className={`relative flex items-end gap-3 rounded-2xl border bg-[var(--bg-elevated)] transition-all duration-200 ${
-          value.trim() ? 'border-indigo-500/40 shadow-lg shadow-indigo-500/5' : 'border-[var(--border-default)]'
-        }`}>
-          <textarea
-            ref={textareaRef}
-            placeholder="Describe what you want the agent to do..."
-            value={value}
-            onChange={(e) => {
-              onChange(e.target.value);
-              e.target.style.height = 'auto';
-              e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                onSubmit(e as any);
-              }
-            }}
-            disabled={isStreaming}
-            rows={1}
-            className="auto-textarea flex-1 px-4 py-3.5 bg-transparent text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none disabled:opacity-50 focus-ring rounded-2xl"
-          />
-          <div className="flex items-center gap-2 px-3 pb-3">
-            {value.length > 0 && (
-              <span className="text-[10px] text-zinc-600 font-mono">{value.length}</span>
-            )}
-            <button
-              type="submit"
-              disabled={isStreaming || !value.trim()}
-              className="h-9 w-9 flex items-center justify-center rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/20 transition-all disabled:opacity-40 disabled:bg-zinc-700 disabled:shadow-none active:scale-95"
-            >
-              {isStreaming
-                ? <Loader2 className="h-4 w-4 animate-spin" />
-                : <Play className="h-4 w-4 fill-current" />
-              }
-            </button>
+      <div className="max-w-3xl mx-auto w-full">
+        {/* Quick prompt chips */}
+        {activeGoal && !isStreaming && (
+          <div className="flex flex-wrap gap-1.5 mb-3">
+            {EXAMPLE_PROMPTS.slice(0, 2).map((p) => (
+              <button
+                key={p}
+                onClick={() => handleChipClick(p)}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-full border border-[var(--border-subtle)] text-[10px] text-zinc-500 hover:text-zinc-200 hover:border-[var(--border-default)] transition-all"
+              >
+                <ArrowRight className="h-2.5 w-2.5" />{p}
+              </button>
+            ))}
           </div>
-        </div>
-        <p className="text-[10px] text-zinc-600 mt-1.5 ml-1">
-          Press Enter to run · Shift+Enter for new line
-        </p>
-      </form>
+        )}
+
+        <form onSubmit={onSubmit} className="relative">
+          <div className={`relative flex items-end gap-3 rounded-2xl border bg-[var(--bg-elevated)] transition-all duration-200 ${
+            value.trim() ? 'border-indigo-500/40 shadow-lg shadow-indigo-500/5' : 'border-[var(--border-default)]'
+          }`}>
+            <textarea
+              ref={textareaRef}
+              placeholder="Describe what you want the agent to do..."
+              value={value}
+              onChange={(e) => {
+                onChange(e.target.value);
+                e.target.style.height = 'auto';
+                e.target.style.height = Math.min(e.target.scrollHeight, 200) + 'px';
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  onSubmit(e as any);
+                }
+              }}
+              disabled={isStreaming}
+              rows={1}
+              className="auto-textarea flex-1 px-4 py-3.5 bg-transparent text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none disabled:opacity-50 focus-ring rounded-2xl"
+            />
+            <div className="flex items-center gap-2 px-3 pb-3">
+              {value.length > 0 && (
+                <span className="text-[10px] text-zinc-600 font-mono">{value.length}</span>
+              )}
+              <button
+                type="submit"
+                disabled={isStreaming || !value.trim()}
+                className="h-9 w-9 flex items-center justify-center rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white shadow-lg shadow-indigo-600/20 transition-all disabled:opacity-40 disabled:bg-zinc-700 disabled:shadow-none active:scale-95"
+              >
+                {isStreaming
+                  ? <Loader2 className="h-4 w-4 animate-spin" />
+                  : <Play className="h-4 w-4 fill-current" />
+                }
+              </button>
+            </div>
+          </div>
+          <p className="text-[10px] text-zinc-600 mt-1.5 ml-1">
+            Press Enter to run · Shift+Enter for new line
+          </p>
+        </form>
+      </div>
     </div>
   );
 }

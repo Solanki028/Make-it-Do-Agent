@@ -120,46 +120,81 @@ export default function Home() {
           onStop={stopExecution}
         />
 
-        {/* ── Two-pane workspace ──────────────────────────────────────── */}
-        <div className="flex-1 flex overflow-hidden">
+        {/* ── Unified Single-Pane Workspace ───────────────────────────── */}
+        <div className="flex-1 flex flex-col overflow-hidden relative">
 
-          {/* ── Left pane: Status + Input ─────────────────────────────── */}
-          <div className="flex-1 flex flex-col min-w-0 border-r border-[var(--border-subtle)] overflow-y-auto">
+          {/* Central conversation scroll view */}
+          <div className="flex-1 overflow-y-auto scrollbar-thin">
+            <div className="max-w-3xl mx-auto w-full px-4 py-6 flex flex-col gap-5 min-h-full">
+              
+              {/* Success flash banner & run summary */}
+              {showSuccess && <SuccessBanner steps={steps} />}
 
-            {/* Success flash + summary card */}
-            {showSuccess && <SuccessBanner steps={steps} />}
+              {/* Human-in-the-loop approval request */}
+              {pendingApproval && (
+                <ApprovalCard
+                  pendingApproval={pendingApproval}
+                  onApprove={approveAction}
+                />
+              )}
 
-            {/* Human-in-the-loop approval card */}
-            {pendingApproval && (
-              <ApprovalCard
-                pendingApproval={pendingApproval}
-                onApprove={approveAction}
-              />
-            )}
+              {/* Execution Error Banner */}
+              {error && (
+                <ErrorBanner
+                  error={error}
+                  onRetry={() => activeGoal && startExecution(activeGoal)}
+                />
+              )}
 
-            {/* Error banner */}
-            {error && (
-              <ErrorBanner
-                error={error}
-                onRetry={() => activeGoal && startExecution(activeGoal)}
-              />
-            )}
+              {/* Goal presentation card or idle empty state */}
+              {activeGoal ? (
+                <>
+                  {/* Top Header Active Goal Card */}
+                  <ActiveGoalCard
+                    goal={activeGoal}
+                    executionId={executionId}
+                    isStreaming={isStreaming}
+                  />
 
-            {/* Active goal or empty state */}
-            {activeGoal ? (
-              <ActiveGoalCard
-                goal={activeGoal}
-                executionId={executionId}
-                isStreaming={isStreaming}
-              />
-            ) : (
-              <EmptyState onChipClick={(p) => { setGoalInput(p); textareaRef.current?.focus(); }} />
-            )}
+                  {/* Plan Roadmapping Stepper */}
+                  {plan.length > 0 && (
+                    <div className="animate-fade-in mt-1">
+                      <PlanProgressBar plan={plan} currentIndex={currentStepIndex} />
+                    </div>
+                  )}
 
-            {/* Spacer */}
-            <div className="flex-1" />
+                  {/* Inline Execution Trace Steps */}
+                  {steps.length > 0 && (
+                    <div className="space-y-4 mt-2">
+                      <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 pl-1">
+                        Execution History
+                      </p>
+                      {steps.map((step, i) => (
+                        <TraceCard key={step.id} step={step} index={i} />
+                      ))}
+                    </div>
+                  )}
 
-            {/* Goal input */}
+                  {/* Live typing indicator */}
+                  {isStreaming && (
+                    <div className="pl-[52px] animate-fade-in mt-1">
+                      <div className="glass rounded-xl px-4 py-2 inline-flex">
+                        <TypingIndicator />
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <EmptyState onChipClick={(p) => { setGoalInput(p); textareaRef.current?.focus(); }} />
+              )}
+
+              {/* Scroll anchor */}
+              <div ref={traceEndRef} className="h-4" />
+            </div>
+          </div>
+
+          {/* Bottom input area */}
+          <div className="shrink-0">
             <GoalInput
               value={goalInput}
               onChange={setGoalInput}
@@ -168,63 +203,6 @@ export default function Home() {
               activeGoal={activeGoal}
               textareaRef={textareaRef}
             />
-          </div>
-
-          {/* ── Right pane: Execution Trace ───────────────────────────── */}
-          <div className="hidden md:flex flex-col w-[420px] shrink-0 bg-[var(--bg-surface)]/40 overflow-hidden">
-            {/* Pane header */}
-            <div className="shrink-0 flex items-center gap-2.5 px-5 py-3.5 border-b border-[var(--border-subtle)]">
-              <Terminal className="h-4 w-4 text-indigo-400" />
-              <span className="text-sm font-semibold text-zinc-200">Execution Trace</span>
-              {isStreaming && (
-                <div className="ml-auto flex gap-1">
-                  <span className="typing-dot" />
-                  <span className="typing-dot" />
-                  <span className="typing-dot" />
-                </div>
-              )}
-              {!isStreaming && steps.length > 0 && (
-                <span className="ml-auto text-[10px] text-zinc-600 font-mono">
-                  {steps.length} steps
-                </span>
-              )}
-            </div>
-
-            {/* Scrollable trace */}
-            <div className="flex-1 overflow-y-auto p-4 space-y-1">
-              {/* Plan progress */}
-              {plan.length > 0 && (
-                <div className="mb-4">
-                  <PlanProgressBar plan={plan} currentIndex={currentStepIndex} />
-                </div>
-              )}
-
-              {/* Empty trace state */}
-              {steps.length === 0 && (
-                <div className="h-full flex flex-col items-center justify-center text-center py-16 space-y-3">
-                  <div className="h-12 w-12 rounded-xl bg-[var(--bg-elevated)] border border-[var(--border-subtle)] flex items-center justify-center">
-                    <Terminal className="h-5 w-5 text-zinc-600" />
-                  </div>
-                  <p className="text-sm text-zinc-600">Trace appears here when a goal is running</p>
-                </div>
-              )}
-
-              {/* Steps timeline */}
-              {steps.map((step, i) => (
-                <TraceCard key={step.id} step={step} index={i} />
-              ))}
-
-              {/* Live typing indicator */}
-              {isStreaming && steps.length > 0 && (
-                <div className="pl-[52px] animate-fade-in">
-                  <div className="glass rounded-xl px-4 py-2 inline-flex">
-                    <TypingIndicator />
-                  </div>
-                </div>
-              )}
-
-              <div ref={traceEndRef} />
-            </div>
           </div>
         </div>
       </main>
