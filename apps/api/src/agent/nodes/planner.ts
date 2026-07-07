@@ -78,14 +78,27 @@ export async function plannerNode(state: AgentState): Promise<Partial<AgentState
   const model = new CustomChatClient({ temperature: 0, jsonMode: true });
   const availableTools = mcpClientManager.getTools();
 
-  const toolsCompact = availableTools
-    .map((t) => `Server: ${t.serverName}\nTool: ${t.name}\nDescription: ${(t.description ?? '').slice(0, 120)}\n`)
-    .join('\n');
+  const toolCatalog = availableTools.map((t) => ({
+    server: t.serverName,
+    tool: t.name,
+    description: (t.description ?? '').slice(0, 120),
+  }));
+
+  const toolsCompact = JSON.stringify(toolCatalog, null, 2);
+
+  function truncateForLLM(text: string, maxLength: number) {
+    const trimmed = text.trim();
+    if (trimmed.length <= maxLength) return trimmed;
+    return trimmed.slice(0, maxLength - 80) + '\n\n[...truncated to save tokens...]';
+  }
 
   const systemPrompt = `You are the brain of "Make It Do", an agentic host.
 Your goal is to accomplish: "${state.goal}"
 
-Available tools:
+Conversation memory:
+${(state.memory ?? []).join('\n') || 'No prior memory.'}
+
+Available tools (structured metadata):
 ${toolsCompact}
 
 Current Plan: ${JSON.stringify(state.plan)}
@@ -99,16 +112,17 @@ Output ONLY valid JSON (no markdown):
   "reasoning": "why you chose this action"
 }
 
-The "server" field of "nextToolCall" MUST match the "Server" value of the tool exactly (e.g. "local-filesystem").
-The "tool" field of "nextToolCall" MUST match the "Tool" value of the tool exactly (e.g. "read_file").
+The "server" field of "nextToolCall" MUST match the "server" value of the selected tool exactly (e.g. "local-filesystem").
+The "tool" field of "nextToolCall" MUST match the "tool" value of the selected tool exactly (e.g. "read_file").
 Do NOT prefix the tool name with the server name or combine them (do NOT use "local-filesystem__read_file" or "local-filesystem__local-filesystem__read_file"). Keep them strictly separate.
+Use only tools that appear in the structured metadata above. If no tool is appropriate, set "nextToolCall" to null.
 
-If the goal is fully accomplished, set "nextToolCall" to null.`;
+If the goal is fully accomplished, set "nextToolCall" to null and set "completed" to true.`;
 
   // ── Build message payload with rolling summarization ─────────────────
   // Compress older messages into a summary once history grows beyond threshold.
   // Lowered from 10 → 6 so that large tool outputs (files, .env) don’t stack up.
-  const MESSAGE_SUMMARY_THRESHOLD = 6;
+  const MESSAGE_SUMMARY_THRESHOLD = 4;
   let messagesToProcess = state.messages;
 
   if (state.messages.length > MESSAGE_SUMMARY_THRESHOLD) {
@@ -149,8 +163,7 @@ If the goal is fully accomplished, set "nextToolCall" to null.`;
 
   for (const m of messagesToProcess) {
     const rawContent = typeof m.content === 'string' ? m.content : JSON.stringify(m.content);
-    const contentText = rawContent.trim() || 'Tool executed successfully, but returned no data.';
-
+      const contentText = truncateForLLM(rawContent.trim(), 750) || 'Tool executed successfully, but returned no data.';
     if (m._getType() === 'tool') {
       formattedMessages.push(new ToolMessage({
         content: contentText,
@@ -190,6 +203,7 @@ If the goal is fully accomplished, set "nextToolCall" to null.`;
 
     // ── Loop detection ────────────────────────────────────────────────────
     let nextToolCall = result.nextToolCall;
+    const completed = result.completed === true;
     if (nextToolCall) {
       const fp = toolCallFingerprint(nextToolCall.server, nextToolCall.tool, nextToolCall.arguments);
       const callCount = (state.loopHistory[fp] ?? 0) + 1;
@@ -238,6 +252,7 @@ If the goal is fully accomplished, set "nextToolCall" to null.`;
           plan: result.plan,
           currentStepIndex: result.nextStepIndex,
           nextToolCall: undefined,                    // DO NOT execute yet
+          plannerDeclaredCompletion: false,
           humanInputRequired: true,
           pendingApprovalToolCall: {
             id: toolCallId,
@@ -311,6 +326,7 @@ If the goal is fully accomplished, set "nextToolCall" to null.`;
       plan: result.plan,
       currentStepIndex: result.nextStepIndex,
       nextToolCall: undefined,
+      plannerDeclaredCompletion: completed,
       messages: [simpleAiMsg],
       stepCount: state.stepCount + 1,
       metrics: {
@@ -323,13 +339,14 @@ If the goal is fully accomplished, set "nextToolCall" to null.`;
         nodeName: 'planner',
         timestamp: new Date().toISOString(),
         message: 'Planner reasoning: ' + (result.reasoning || 'Planning next move.'),
-        details: { nextToolCall: null, tokens: { promptTokens, completionTokens, runCost } },
+        details: { nextToolCall: null, plannerDeclaredCompletion: completed, tokens: { promptTokens, completionTokens, runCost } },
       }],
     };
   } catch (err) {
     console.error('[Planner] Failed to parse LLM output:', err);
     return {
       stepCount: state.stepCount + 1,
+      plannerDeclaredCompletion: false,
       trace: [{
         id: 'plan-' + Date.now(),
         nodeName: 'planner',

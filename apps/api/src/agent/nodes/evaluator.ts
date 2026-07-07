@@ -42,12 +42,12 @@ export async function evaluatorNode(state: AgentState): Promise<Partial<AgentSta
         t.toolCalls.forEach((tc) => {
           str += `\n  - Tool Call: ${tc.server}__${tc.tool} -> status: ${tc.status}`;
           if (tc.arguments && Object.keys(tc.arguments).length > 0) {
-            str += `\n    Arguments: ${JSON.stringify(tc.arguments)}`;
+            str += `\n    Arguments: ${JSON.stringify(tc.arguments).slice(0, 220)}`;
           }
           if (tc.output) {
-            // Include a snippet of the tool output (first 800 chars) to prevent context bloat
+            // Include a snippet of the tool output (first 300 chars) to prevent context bloat
             const truncatedOutput = typeof tc.output === 'string' ? tc.output : JSON.stringify(tc.output);
-            str += `\n    Output: ${truncatedOutput.slice(0, 800)}`;
+            str += `\n    Output: ${truncatedOutput.slice(0, 300)}`;
           }
           if (tc.error) {
             str += `\n    Error: ${tc.error}`;

@@ -229,6 +229,22 @@ export const useAgentStore = create<AgentStore>((set, get) => ({
         });
       });
 
+      es.addEventListener('final_response', (e: MessageEvent) => {
+        const payload = JSON.parse(e.data);
+        set((state) => ({
+          steps: [
+            ...state.steps,
+            {
+              id: 'final-' + Date.now(),
+              nodeName: 'response_generator',
+              timestamp: new Date().toISOString(),
+              message: payload.response || 'Task completed successfully!',
+              status: 'success',
+            },
+          ],
+        }));
+      });
+
       es.addEventListener('task_completed', (e: MessageEvent) => {
         const payload = JSON.parse(e.data);
         set((state) => ({

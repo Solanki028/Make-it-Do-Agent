@@ -34,6 +34,7 @@ export interface AgentState {
   loopHistory: Record<string, number>;
   humanInputRequired: boolean;
   humanResponse?: string;
+  plannerDeclaredCompletion?: boolean;
   // Set by planner when a risky action needs user confirmation before execution
   pendingApprovalToolCall?: {
     id: string;
@@ -49,6 +50,7 @@ export interface AgentState {
     completionTokens: number;
     totalCost: number;
   };
+  memory?: string[];
 }
 
 export const agentStateChannels = {
@@ -108,6 +110,10 @@ export const agentStateChannels = {
     value: (x: string | undefined, y: string | undefined) => y ?? x,
     default: () => undefined,
   },
+  plannerDeclaredCompletion: {
+    value: (x: boolean | undefined, y: boolean | undefined) => y ?? x ?? false,
+    default: () => false,
+  },
   goalStatus: {
     value: (x: any, y: any) => y ?? x,
     default: () => undefined,
@@ -119,5 +125,9 @@ export const agentStateChannels = {
   metrics: {
     value: (x: any, y: any) => ({ ...x, ...y }),
     default: () => ({ promptTokens: 0, completionTokens: 0, totalCost: 0 }),
+  },
+  memory: {
+    value: (x: string[] | undefined, y: string[] | undefined) => y ?? x ?? [],
+    default: () => [] as string[],
   },
 };

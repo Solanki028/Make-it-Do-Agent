@@ -48,7 +48,7 @@ async function toolValidatorNode(state: AgentState): Promise<Partial<AgentState>
     };
 
     return {
-      nextToolCall: null, // Clear the hallucinated tool (cleared to undefined by state reducer)
+      nextToolCall: undefined, // Clear the hallucinated tool (cleared to undefined by state reducer)
       messages: [warningMsg],  // Inject corrective instructions into LLM context
       consecutiveFailures: state.consecutiveFailures + 1,
       trace: [traceStep],
@@ -75,7 +75,7 @@ async function humanGateNode(state: AgentState): Promise<Partial<AgentState>> {
 // ─────────────────────────────────────────────
 // Router: Planner → Validator | HumanGate | Evaluator
 // ─────────────────────────────────────────────
-function routeAfterPlanner(state: AgentState): 'validator' | 'human_gate' | 'evaluator' {
+function routeAfterPlanner(state: AgentState): 'validator' | 'human_gate' | 'evaluator' | 'planner' {
   // Hard safety: if stepCount already at ceiling, skip straight to evaluation
   if (state.stepCount >= state.maxSteps) {
     return 'evaluator';
@@ -86,7 +86,12 @@ function routeAfterPlanner(state: AgentState): 'validator' | 'human_gate' | 'eva
   if (state.humanInputRequired) {
     return 'human_gate';
   }
-  return 'evaluator';
+  if (state.plannerDeclaredCompletion) {
+    // Planner explicitly declared that the goal is complete
+    return 'evaluator';
+  }
+  // No tool chosen yet, but planner has not declared completion. Replan.
+  return 'planner';
 }
 
 // ─────────────────────────────────────────────
@@ -218,6 +223,7 @@ const workflow = new StateGraph<AgentState>({
     validator: 'validator',
     human_gate: 'human_gate',
     evaluator: 'evaluator',
+    planner: 'planner',
   })
 
   .addConditionalEdges('validator', routeAfterValidator, {

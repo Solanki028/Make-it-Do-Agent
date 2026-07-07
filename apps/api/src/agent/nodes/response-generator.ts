@@ -12,6 +12,8 @@ import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 export async function responseGeneratorNode(state: AgentState): Promise<Partial<AgentState>> {
   console.log('--- ENTERING FINAL RESPONSE GENERATOR NODE ---');
 
+  const recentMemory = state.memory ?? [];
+
   // 1. Gather all observations from the execution trace
   const observations = state.trace
     .filter((t) => t.nodeName === 'executor')
@@ -70,14 +72,18 @@ ${obs.error ? `Error: ${obs.error}` : ''}
   const systemPrompt = `You are a helpful, conversational AI Assistant. Your task is to provide the final response to the user's goal based on the tool observations.
 Do NOT simply list the steps the agent took. Speak directly to the user's goal and provide the requested information in a polished, conversational format (like ChatGPT or Gemini).
 If a file was read, expose its contents or a meaningful summary. If code was searched, list the matching files and summarize the results.
-If no results were found for a search, explain that clearly. If a screenshot was taken, acknowledge it and mention that they can view it.`;
+If no results were found for a search, explain that clearly. If a screenshot was taken, acknowledge it and mention that they can view it.
+Use the available observations to answer the user's original request directly, not to describe the workflow.`;
 
   const userPrompt = `Original Goal: "${state.goal}"
+
+Conversation memory:
+${recentMemory.join('\n') || 'No prior memory.'}
 
 Tool Observations:
 ${compactObservations || 'No tool actions were executed.'}
 
-Please generate the final response to the user.`;
+Please generate the final response to the user. Keep the answer concise and avoid repeating the internal workflow.`;
 
   let finalResponse = '';
   try {
@@ -88,7 +94,12 @@ Please generate the final response to the user.`;
     finalResponse = typeof response.content === 'string' ? response.content.trim() : 'Goal execution finished.';
   } catch (err: any) {
     console.error('[Response Generator] LLM call failed:', err);
-    finalResponse = `Goal execution finished, but failed to generate conversational response.`;
+    const observationSummary = observations
+      .map((obs, idx) => `${idx + 1}. ${obs.tool}${obs.error ? ` (${obs.error})` : ''}`)
+      .join('\n');
+    finalResponse = observations.length > 0
+      ? `I completed the requested work using the available tools.\n\n${observationSummary}`
+      : 'The task finished, but I was not able to produce a detailed conversational summary.';
   }
 
   // 5. Append final response step to trace
@@ -102,8 +113,14 @@ Please generate the final response to the user.`;
     },
   };
 
+  const memorySnippet = finalResponse.length > 240 ? finalResponse.slice(0, 240) : finalResponse;
+
   return {
     finalResponse,
+    memory: [
+      ...(state.memory ?? []),
+      `${state.goal}: ${memorySnippet}`,
+    ].slice(-6),
     trace: [traceStep],
   };
 }
