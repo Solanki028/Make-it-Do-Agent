@@ -47,7 +47,7 @@ async function toolValidatorNode(state: AgentState): Promise<Partial<AgentState>
     };
 
     return {
-      nextToolCall: undefined, // Clear the hallucinated tool
+      nextToolCall: null, // Clear the hallucinated tool (cleared to undefined by state reducer)
       messages: [warningMsg],  // Inject corrective instructions into LLM context
       consecutiveFailures: state.consecutiveFailures + 1,
       trace: [traceStep],

@@ -58,7 +58,7 @@ export async function evaluatorNode(state: AgentState): Promise<Partial<AgentSta
     })
     .join('\n');
 
-  const model = new CustomChatClient({ temperature: 0 });
+  const model = new CustomChatClient({ temperature: 0, jsonMode: true });
 
   const systemPrompt = `You are an evaluator for an AI agent. Your ONLY job is to determine whether the user's original goal has been fully accomplished based on the agent's execution history.
 

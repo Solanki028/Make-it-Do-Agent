@@ -68,7 +68,7 @@ export const agentStateChannels = {
     default: () => [] as BaseMessage[],
   },
   nextToolCall: {
-    value: (x: any, y: any) => y ?? x,
+    value: (x: any, y: any) => y === null ? undefined : (y ?? x),
     default: () => undefined,
   },
   trace: {

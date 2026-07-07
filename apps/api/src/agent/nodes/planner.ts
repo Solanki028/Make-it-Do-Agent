@@ -76,21 +76,16 @@ export async function plannerNode(state: AgentState): Promise<Partial<AgentState
   }
 
   const model = new CustomChatClient({ temperature: 0, jsonMode: true });
-
   const availableTools = mcpClientManager.getTools();
 
-  // ── Compact tool list — NO full JSON schema ────────────────────────────────
-  // Sending inputSchema for all 47 tools costs ~4000 tokens per call.
-  // We send only the namespaced name + description; the LLM infers arguments
-  // from its training and the description text.
   const toolsCompact = availableTools
-    .map((t) => `- ${t.serverName}__${t.name}: ${(t.description ?? '').slice(0, 120)}`)
+    .map((t) => `Server: ${t.serverName}\nTool: ${t.name}\nDescription: ${(t.description ?? '').slice(0, 120)}\n`)
     .join('\n');
 
   const systemPrompt = `You are the brain of "Make It Do", an agentic host.
 Your goal is to accomplish: "${state.goal}"
 
-Available tools (server__tool: description):
+Available tools:
 ${toolsCompact}
 
 Current Plan: ${JSON.stringify(state.plan)}
@@ -103,6 +98,10 @@ Output ONLY valid JSON (no markdown):
   "nextToolCall": { "server": "server_name", "tool": "tool_name", "arguments": { ... } } | null,
   "reasoning": "why you chose this action"
 }
+
+The "server" field of "nextToolCall" MUST match the "Server" value of the tool exactly (e.g. "local-filesystem").
+The "tool" field of "nextToolCall" MUST match the "Tool" value of the tool exactly (e.g. "read_file").
+Do NOT prefix the tool name with the server name or combine them (do NOT use "local-filesystem__read_file" or "local-filesystem__local-filesystem__read_file"). Keep them strictly separate.
 
 If the goal is fully accomplished, set "nextToolCall" to null.`;
 
