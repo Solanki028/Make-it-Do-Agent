@@ -334,6 +334,10 @@ async function runAgentGraph(executionId: string, goal: string, resumeState?: an
             chunk: reasoning + '\n',
           });
         }
+      } else if (nodeName === 'response_generator') {
+        streamManager.sendEvent(executionId, 'final_response', {
+          response: updates.finalResponse || logsContent,
+        });
       } else {
         streamManager.sendEvent(executionId, 'reasoning_chunk', {
           chunk: `Finished node: ${nodeName}. ${logsContent}\n`,
@@ -364,9 +368,12 @@ async function runAgentGraph(executionId: string, goal: string, resumeState?: an
       },
     });
 
+    const finalState = graphState?.values as any;
+    const finalResult = finalState?.finalResponse || 'Goal completed successfully.';
+
     streamManager.sendEvent(executionId, 'task_completed', {
       status: 'completed',
-      result: 'Goal completed successfully.',
+      result: finalResult,
     });
 
   } catch (err: any) {

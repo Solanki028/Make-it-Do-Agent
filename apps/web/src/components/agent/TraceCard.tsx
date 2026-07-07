@@ -86,9 +86,15 @@ export function TraceCard({ step, index }: { step: TraceStep; index: number }) {
                   {tc.output && (
                     <div className="px-3 py-2 border-t border-white/[0.04]">
                       <div className="text-[9px] font-bold uppercase text-zinc-600 mb-1.5 tracking-wider">Result</div>
-                      <pre className="text-[10px] text-zinc-400 font-mono overflow-x-auto max-h-36 whitespace-pre-wrap">
-                        {typeof tc.output === 'string' ? tc.output : JSON.stringify(tc.output, null, 2)}
-                      </pre>
+                      {typeof tc.output === 'string' && tc.output.startsWith('data:image/') ? (
+                        <div className="my-2 max-w-full overflow-hidden rounded-lg border border-white/10">
+                          <img src={tc.output} alt="Tool output screenshot" className="w-full h-auto object-contain max-h-[300px]" />
+                        </div>
+                      ) : (
+                        <pre className="text-[10px] text-zinc-400 font-mono overflow-x-auto max-h-36 whitespace-pre-wrap">
+                          {typeof tc.output === 'string' ? tc.output : JSON.stringify(tc.output, null, 2)}
+                        </pre>
+                      )}
                     </div>
                   )}
 

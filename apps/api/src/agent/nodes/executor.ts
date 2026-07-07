@@ -19,6 +19,7 @@ export async function executorNode(state: AgentState): Promise<Partial<AgentStat
   let businessSuccess = false;
   let resultStr = '';
   let errorStr = '';
+  let imageContent: { data: string; mimeType: string }[] = [];
 
   try {
     if (id === 'mock-tool-id') {
@@ -42,7 +43,19 @@ export async function executorNode(state: AgentState): Promise<Partial<AgentStat
         const texts = response.content
           .filter((c: any) => c.type === 'text')
           .map((c: any) => c.text);
-        resultStr = texts.join('\n');
+        
+        imageContent = response.content
+          .filter((c: any) => c.type === 'image')
+          .map((c: any) => ({
+            data: c.data,
+            mimeType: c.mimeType || 'image/png',
+          }));
+
+        const imageStr = imageContent
+          .map((c) => `data:${c.mimeType};base64,${c.data}`)
+          .join('\n');
+
+        resultStr = [texts.join('\n'), imageStr].filter(Boolean).join('\n');
       } else {
         resultStr = JSON.stringify(response);
       }
@@ -101,6 +114,7 @@ export async function executorNode(state: AgentState): Promise<Partial<AgentStat
       businessSuccess,
     },
     output: fullOutput,
+    images: imageContent.length > 0 ? imageContent : undefined,
     error: errorStr || undefined,
   };
 

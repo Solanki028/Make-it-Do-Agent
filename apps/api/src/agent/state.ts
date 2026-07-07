@@ -43,6 +43,7 @@ export interface AgentState {
   };
   approvalReason?: string; // Why approval is being requested
   goalStatus?: 'COMPLETED_SUCCESS' | 'COMPLETED_NO_RESULTS' | 'FAILED' | 'ABORTED' | 'CANCELLED';
+  finalResponse?: string;
   metrics: {
     promptTokens: number;
     completionTokens: number;
@@ -109,6 +110,10 @@ export const agentStateChannels = {
   },
   goalStatus: {
     value: (x: any, y: any) => y ?? x,
+    default: () => undefined,
+  },
+  finalResponse: {
+    value: (x: string | undefined, y: string | undefined) => y ?? x,
     default: () => undefined,
   },
   metrics: {

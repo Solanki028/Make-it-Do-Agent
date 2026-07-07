@@ -4,6 +4,7 @@ import { plannerNode } from './nodes/planner.js';
 import { executorNode } from './nodes/executor.js';
 import { evaluatorNode } from './nodes/evaluator.js';
 import { recoveryNode } from './nodes/recovery.js';
+import { responseGeneratorNode } from './nodes/response-generator.js';
 import { HumanMessage } from '@langchain/core/messages';
 import { mcpClientManager } from '../mcp/client-manager.js';
 
@@ -107,11 +108,11 @@ function routeAfterValidator(state: AgentState): 'executor' | 'human_gate' | 're
 }
 
 // ─────────────────────────────────────────────
-// Router: Evaluator → END | Planner
+// Router: Evaluator → Response Generator | Planner
 // Decision is driven by the LLM evaluator's verdict written into state.
 // We inspect the last evaluator trace entry for the goalAchieved flag.
 // ─────────────────────────────────────────────
-function routeAfterEvaluator(state: AgentState): typeof END | 'planner' {
+function routeAfterEvaluator(state: AgentState): 'response_generator' | 'planner' {
   // If goalStatus is resolved to a terminal state, terminate immediately
   if (
     state.goalStatus === 'COMPLETED_SUCCESS' ||
@@ -120,14 +121,14 @@ function routeAfterEvaluator(state: AgentState): typeof END | 'planner' {
     state.goalStatus === 'FAILED' ||
     state.goalStatus === 'CANCELLED'
   ) {
-    console.log(`[Router] Goal resolved with status: ${state.goalStatus} — terminating.`);
-    return END;
+    console.log(`[Router] Goal resolved with status: ${state.goalStatus} — routing to response generator.`);
+    return 'response_generator';
   }
 
   // Hard stop: exceeded max steps
   if (state.stepCount >= state.maxSteps) {
-    console.log('[Router] Max steps reached — terminating.');
-    return END;
+    console.log('[Router] Max steps reached — routing to response generator.');
+    return 'response_generator';
   }
 
   // Find the last evaluator trace entry to read its verdict
@@ -138,13 +139,13 @@ function routeAfterEvaluator(state: AgentState): typeof END | 'planner' {
   const goalAchieved = lastEvalTrace?.details?.goalAchieved === true;
 
   if (goalAchieved) {
-    console.log('[Router] Goal achieved — routing to END.');
-    return END;
+    console.log('[Router] Goal achieved — routing to response generator.');
+    return 'response_generator';
   }
 
   // Safety fallback: if planner explicitly cleared nextToolCall and no eval trace, end
   if (!state.nextToolCall && !lastEvalTrace) {
-    return END;
+    return 'response_generator';
   }
 
   console.log('[Router] Goal not yet achieved — routing back to planner.');
@@ -187,12 +188,12 @@ function routeAfterExecutor(state: AgentState): 'evaluator' | 'recovery' {
 }
 
 // ─────────────────────────────────────────────
-// Router: Recovery → Planner | END
+// Router: Recovery → Planner | Response Generator
 // ─────────────────────────────────────────────
-function routeAfterRecovery(state: AgentState): 'planner' | typeof END {
+function routeAfterRecovery(state: AgentState): 'planner' | 'response_generator' {
   if (state.goalStatus === 'ABORTED' || state.goalStatus === 'FAILED') {
-    console.log('[Router] Recovery aborted the session — routing to END.');
-    return END;
+    console.log('[Router] Recovery aborted the session — routing to response generator.');
+    return 'response_generator';
   }
   return 'planner';
 }
@@ -209,6 +210,7 @@ const workflow = new StateGraph<AgentState>({
   .addNode('human_gate', humanGateNode)
   .addNode('recovery', recoveryNode)
   .addNode('evaluator', evaluatorNode)
+  .addNode('response_generator', responseGeneratorNode)
 
   .addEdge(START, 'planner')
 
@@ -232,13 +234,14 @@ const workflow = new StateGraph<AgentState>({
 
   .addConditionalEdges('recovery', routeAfterRecovery, {
     planner: 'planner',
-    [END]: END,
+    response_generator: 'response_generator',
   })
   .addEdge('human_gate', END)  // Pause here — /approve endpoint re-runs graph
 
   .addConditionalEdges('evaluator', routeAfterEvaluator, {
-    [END]: END,
+    response_generator: 'response_generator',
     planner: 'planner',
-  });
+  })
+  .addEdge('response_generator', END);
 
 export const graph = workflow.compile();

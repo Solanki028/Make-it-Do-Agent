@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Terminal } from 'lucide-react';
+import { Terminal, ChevronDown, Sparkles } from 'lucide-react';
 import { useAgentStore } from '@/store/agent-store';
 
 // ─── Components ───────────────────────────────────────────────────────────────
@@ -163,15 +163,66 @@ export default function Home() {
                     </div>
                   )}
 
-                  {/* Inline Execution Trace Steps */}
+                  {/* Final AI Response (ChatGPT-style) */}
+                  {steps.some((s) => s.nodeName === 'response_generator') && (
+                    <div className="glass p-6 rounded-2xl border border-indigo-500/20 shadow-xl shadow-indigo-500/5 mt-4 animate-fade-in space-y-4">
+                      <div className="flex items-center gap-2 pb-3 border-b border-white/[0.06]">
+                        <div className="h-7 w-7 rounded-lg bg-indigo-500/10 flex items-center justify-center">
+                          <Sparkles className="h-4 w-4 text-indigo-400" />
+                        </div>
+                        <span className="text-xs font-bold uppercase tracking-widest text-indigo-400">Final AI Response</span>
+                      </div>
+                      
+                      <div className="text-sm text-zinc-200 leading-relaxed whitespace-pre-wrap font-sans">
+                        {steps.find((s) => s.nodeName === 'response_generator')?.message}
+                      </div>
+
+                      {/* Display any screenshots associated with the successful tool calls */}
+                      {(() => {
+                        const screenshots = steps
+                          .filter(s => s.nodeName === 'executor')
+                          .flatMap(s => s.toolCalls || [])
+                          .filter(tc => typeof tc.output === 'string' && tc.output.startsWith('data:image/'))
+                          .map(tc => {
+                            const parts = tc.output.match(/^data:([^;]+);base64,(.+)$/);
+                            return {
+                              mimeType: parts ? parts[1] : 'image/png',
+                              data: parts ? parts[2] : tc.output,
+                            };
+                          });
+
+                        return screenshots.map((screenshot: any, sIdx: number) => (
+                          <div key={sIdx} className="mt-4 rounded-xl overflow-hidden border border-white/10 max-w-xl shadow-lg">
+                            <div className="bg-zinc-900/60 px-3 py-1.5 text-[9px] uppercase tracking-wider font-semibold text-zinc-400 border-b border-white/5 flex items-center gap-1.5">
+                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Captured Screenshot
+                            </div>
+                            <img 
+                              src={`data:${screenshot.mimeType || 'image/png'};base64,${screenshot.data}`} 
+                              alt="Agent captured screenshot" 
+                              className="w-full h-auto object-contain max-h-[350px]"
+                            />
+                          </div>
+                        ));
+                      })()}
+                    </div>
+                  )}
+
+                  {/* Collapsible Execution Trace Steps */}
                   {steps.length > 0 && (
-                    <div className="space-y-4 mt-2">
-                      <p className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 pl-1">
-                        Execution History
-                      </p>
-                      {steps.map((step, i) => (
-                        <TraceCard key={step.id} step={step} index={i} />
-                      ))}
+                    <div className="mt-6">
+                      <details className="group" open={!steps.some((s) => s.nodeName === 'response_generator')}>
+                        <summary className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 pl-1 cursor-pointer select-none hover:text-zinc-300 transition-colors flex items-center gap-2 list-none">
+                          <ChevronDown className="h-3 w-3 group-open:rotate-180 transition-transform" />
+                          Execution Trace & Tool Activity ({steps.length})
+                        </summary>
+                        <div className="space-y-4 mt-4 pl-1">
+                          {steps
+                            .filter((step) => step.nodeName !== 'response_generator')
+                            .map((step, i) => (
+                              <TraceCard key={step.id} step={step} index={i} />
+                            ))}
+                        </div>
+                      </details>
                     </div>
                   )}
 
