@@ -1,6 +1,7 @@
 import { AgentState } from '../state.js';
 import { mcpClientManager } from '../../mcp/client-manager.js';
 import { ToolMessage } from '@langchain/core/messages';
+import { buildStructuredObservation } from '../observation-builder.js';
 
 export async function executorNode(state: AgentState): Promise<Partial<AgentState>> {
   console.log('--- ENTERING EXECUTOR NODE ---');
@@ -20,6 +21,11 @@ export async function executorNode(state: AgentState): Promise<Partial<AgentStat
   let resultStr = '';
   let errorStr = '';
   let imageContent: { data: string; mimeType: string }[] = [];
+  let toolDisplayText = '';
+  let toolImageNote = '';
+  const startedAt = Date.now();
+  let filesCreated: string[] = [];
+  let filesModified: string[] = [];
 
   try {
     if (id === 'mock-tool-id') {
@@ -51,17 +57,40 @@ export async function executorNode(state: AgentState): Promise<Partial<AgentStat
             mimeType: c.mimeType || 'image/png',
           }));
 
+        if (imageContent.length > 0) {
+          toolImageNote = `[${imageContent.length} image(s) omitted from LLM context]`;
+        }
+
         const imageStr = imageContent
           .map((c) => `data:${c.mimeType};base64,${c.data}`)
           .join('\n');
 
-        resultStr = [texts.join('\n'), imageStr].filter(Boolean).join('\n');
+        toolDisplayText = texts.join('\n');
+        resultStr = [toolDisplayText, imageStr].filter(Boolean).join('\n');
       } else {
+        toolDisplayText = JSON.stringify(response);
         resultStr = JSON.stringify(response);
       }
 
       if (!resultStr || resultStr.trim() === '') {
         resultStr = "Tool executed successfully, but returned no data.";
+      }
+
+      if (typeof response?.content === 'object' && response.content) {
+        const content = Array.isArray(response.content) ? response.content : [response.content];
+        for (const item of content) {
+          if (item?.type === 'text' && typeof item.text === 'string') {
+            const lower = item.text.toLowerCase();
+            if (lower.includes('created')) {
+              const match = item.text.match(/([A-Za-z0-9_./-]+\.(?:ts|tsx|js|jsx|json|md|txt|html|css))/gi);
+              if (match) filesCreated.push(...match);
+            }
+            if (lower.includes('updated') || lower.includes('modified')) {
+              const match = item.text.match(/([A-Za-z0-9_./-]+\.(?:ts|tsx|js|jsx|json|md|txt|html|css))/gi);
+              if (match) filesModified.push(...match);
+            }
+          }
+        }
       }
 
       // 3. Business Success outcome evaluation
@@ -95,28 +124,31 @@ export async function executorNode(state: AgentState): Promise<Partial<AgentStat
   }
 
   // ── Truncate output sent to the LLM ───────────────────────────────────
-  const MAX_LLM_OUTPUT_CHARS = 3000;
+  const MAX_LLM_OUTPUT_CHARS = 1200;
   const fullOutput = resultStr;
-  const llmOutput = resultStr.length > MAX_LLM_OUTPUT_CHARS
-    ? resultStr.slice(0, MAX_LLM_OUTPUT_CHARS)
-      + `\n\n[...output truncated — ${resultStr.length - MAX_LLM_OUTPUT_CHARS} more chars not shown to save tokens. Full content is available above.]`
-    : resultStr;
+  const llmPayload = [toolDisplayText, toolImageNote].filter(Boolean).join('\n\n');
+  const llmOutput = llmPayload.length > MAX_LLM_OUTPUT_CHARS
+    ? llmPayload.slice(0, MAX_LLM_OUTPUT_CHARS - 80)
+      + `\n\n[...output truncated — ${llmPayload.length - MAX_LLM_OUTPUT_CHARS} more chars not shown to save tokens...]`
+    : llmPayload;
 
-  // Structured Observation Object
-  const observation = {
+  const observation = buildStructuredObservation({
     toolCallId: id,
     server,
     tool,
     arguments: args,
+    output: fullOutput,
     successMetrics: {
       transportSuccess,
       toolSuccess,
       businessSuccess,
     },
-    output: fullOutput,
-    images: imageContent.length > 0 ? imageContent : undefined,
     error: errorStr || undefined,
-  };
+    executionDurationMs: Date.now() - startedAt,
+    filesCreated,
+    filesModified,
+    images: imageContent.length > 0 ? imageContent : undefined,
+  });
 
   // Tool execution status: succeeds if transport & tool succeeded, and no business errors occurred
   const hasBusinessError = !businessSuccess && errorStr !== 'No matching results found.' && errorStr !== '';
@@ -130,7 +162,8 @@ export async function executorNode(state: AgentState): Promise<Partial<AgentStat
       ? (businessSuccess ? `Successfully executed tool ${tool} on server ${server}` : `Executed tool ${tool} on server ${server}: ${errorStr}`)
       : `Failed executing tool ${tool} on server ${server}: ${errorStr}`,
     details: {
-      observation, // Exposed as structured observation
+      observation,
+      observationSummary: observation.summary,
     },
     toolCalls: [
       {
