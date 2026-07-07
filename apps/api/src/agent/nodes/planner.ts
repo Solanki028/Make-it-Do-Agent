@@ -17,27 +17,44 @@ function toolCallFingerprint(server: string, tool: string, args: Record<string, 
 export async function plannerNode(state: AgentState): Promise<Partial<AgentState>> {
   console.log('--- ENTERING PLANNER NODE ---');
 
+  // ── Guard: Tool call already scheduled (e.g. from HITL resume or recovery node) ──
+  if (state.nextToolCall) {
+    console.log('[Planner] Tool call already scheduled, passing through to executor.');
+    return {};
+  }
+
   // ── Guard: API key missing ────────────────────────────────────────────────
   const hasKey = !!env.GITHUB_TOKEN || !!process.env.GITHUB_TOKEN;
   if (!hasKey) {
     console.warn('GITHUB_TOKEN is missing! Using Mock Planner Output.');
     const mockPlan = ['Analyze workspace', 'Mock list directory content', 'Produce report'];
     if (state.stepCount === 0) {
+      const toolCallId = 'mock-tool-id';
+      const aiMsg = new AIMessage({
+        content: 'Using mock planner output.',
+        tool_calls: [{
+          id: toolCallId,
+          name: 'local-filesystem__list_directory',
+          args: { path: '.' }
+        }]
+      });
       return {
         plan: mockPlan,
         currentStepIndex: 0,
         nextToolCall: {
-          id: 'mock-tool-id',
+          id: toolCallId,
           server: 'local-filesystem',
           tool: 'list_directory',
           arguments: { path: '.' },
         },
+        messages: [aiMsg],
         stepCount: state.stepCount + 1,
       };
     }
     return {
       currentStepIndex: state.currentStepIndex + 1,
       nextToolCall: undefined,
+      messages: [new AIMessage('Completed mock planning steps.')],
       stepCount: state.stepCount + 1,
     };
   }
@@ -47,6 +64,7 @@ export async function plannerNode(state: AgentState): Promise<Partial<AgentState
     console.warn(`[Planner] Max steps (${state.maxSteps}) reached. Halting.`);
     return {
       nextToolCall: undefined,
+      messages: [new AIMessage('Max steps ceiling reached. Exiting.')],
       stepCount: state.stepCount + 1,
       trace: [{
         id: 'plan-' + Date.now(),
@@ -57,39 +75,36 @@ export async function plannerNode(state: AgentState): Promise<Partial<AgentState
     };
   }
 
-  const model = new CustomChatClient({ temperature: 0 });
+  const model = new CustomChatClient({ temperature: 0, jsonMode: true });
 
   const availableTools = mcpClientManager.getTools();
-  const toolsFormatted = availableTools.map((t) => ({
-    namespacedName: `${t.serverName}__${t.name}`,
-    description: t.description,
-    schema: t.inputSchema,
-  }));
+
+  // ── Compact tool list — NO full JSON schema ────────────────────────────────
+  // Sending inputSchema for all 47 tools costs ~4000 tokens per call.
+  // We send only the namespaced name + description; the LLM infers arguments
+  // from its training and the description text.
+  const toolsCompact = availableTools
+    .map((t) => `- ${t.serverName}__${t.name}: ${(t.description ?? '').slice(0, 120)}`)
+    .join('\n');
 
   const systemPrompt = `You are the brain of "Make It Do", an agentic host.
 Your goal is to accomplish: "${state.goal}"
 
-Available tools to execute actions:
-${JSON.stringify(toolsFormatted, null, 2)}
+Available tools (server__tool: description):
+${toolsCompact}
 
-Current Plan steps:
-${JSON.stringify(state.plan, null, 2)}
-Current Step Index: ${state.currentStepIndex}
+Current Plan: ${JSON.stringify(state.plan)}
+Step index: ${state.currentStepIndex}
 
-Based on the goal and execution history, output ONLY a JSON object:
+Output ONLY valid JSON (no markdown):
 {
   "plan": ["step 1", "step 2", ...],
   "nextStepIndex": number,
-  "nextToolCall": {
-    "server": "server_name",
-    "tool": "tool_name",
-    "arguments": { ... }
-  } | null,
-  "reasoning": "Explain why you chose this action"
+  "nextToolCall": { "server": "server_name", "tool": "tool_name", "arguments": { ... } } | null,
+  "reasoning": "why you chose this action"
 }
 
-If the goal is fully accomplished, set "nextToolCall" to null.
-Do NOT wrap your response in markdown. Start with { and end with }.`;
+If the goal is fully accomplished, set "nextToolCall" to null.`;
 
   // ── Build message payload with rolling summarization ─────────────────
   // Compress older messages into a summary once history grows beyond threshold.
@@ -144,7 +159,11 @@ Do NOT wrap your response in markdown. Start with { and end with }.`;
         tool_call_id: (m as ToolMessage).tool_call_id || 'tc_call',
       }));
     } else if (m._getType() === 'ai') {
-      formattedMessages.push(new AIMessage(contentText));
+      const aiMsg = m as AIMessage;
+      formattedMessages.push(new AIMessage({
+        content: contentText,
+        tool_calls: aiMsg.tool_calls,
+      }));
     } else {
       formattedMessages.push(new HumanMessage(contentText || 'Please determine the next step.'));
     }
@@ -199,6 +218,18 @@ Do NOT wrap your response in markdown. Start with { and end with }.`;
                || nextToolCall!.tool.toLowerCase() === r
       );
 
+      const toolCallId = 'tc_' + Date.now();
+      const aiMsg = new AIMessage({
+        content: result.reasoning || 'Planning next move.',
+        tool_calls: nextToolCall ? [
+          {
+            id: toolCallId,
+            name: `${nextToolCall.server}__${nextToolCall.tool}`,
+            args: nextToolCall.arguments,
+          }
+        ] : undefined
+      });
+
       if (isRiskyAction && nextToolCall) {
         const argsPreview = JSON.stringify(nextToolCall.arguments, null, 2).slice(0, 400);
         const approvalReason = `The agent wants to run a potentially destructive action:\n\nTool: ${nextToolCall.server}/${nextToolCall.tool}\n\nArguments:\n${argsPreview}\n\nReasoning: ${result.reasoning || 'No reasoning provided.'}`;
@@ -210,12 +241,13 @@ Do NOT wrap your response in markdown. Start with { and end with }.`;
           nextToolCall: undefined,                    // DO NOT execute yet
           humanInputRequired: true,
           pendingApprovalToolCall: {
-            id: 'tc_' + Date.now(),
+            id: toolCallId,
             server: nextToolCall.server,
             tool: nextToolCall.tool,
             arguments: nextToolCall.arguments,
           },
           approvalReason,
+          messages: [aiMsg],
           stepCount: state.stepCount + 1,
           loopHistory: updatedLoopHistory,
           metrics: {
@@ -242,7 +274,7 @@ Do NOT wrap your response in markdown. Start with { and end with }.`;
         plan: result.plan,
         currentStepIndex: result.nextStepIndex,
         nextToolCall: nextToolCall ? {
-          id: 'tc_' + Date.now(),
+          id: toolCallId,
           server: nextToolCall.server,
           tool: nextToolCall.tool,
           arguments: nextToolCall.arguments,
@@ -250,6 +282,7 @@ Do NOT wrap your response in markdown. Start with { and end with }.`;
         humanInputRequired: false,
         pendingApprovalToolCall: undefined,
         approvalReason: undefined,
+        messages: [aiMsg],
         stepCount: state.stepCount + 1,
         loopHistory: updatedLoopHistory,
         metrics: {
@@ -271,10 +304,15 @@ Do NOT wrap your response in markdown. Start with { and end with }.`;
       };
     }
 
+    const simpleAiMsg = new AIMessage({
+      content: result.reasoning || 'Goal completed.',
+    });
+
     return {
       plan: result.plan,
       currentStepIndex: result.nextStepIndex,
       nextToolCall: undefined,
+      messages: [simpleAiMsg],
       stepCount: state.stepCount + 1,
       metrics: {
         promptTokens: (state.metrics?.promptTokens ?? 0) + promptTokens,
