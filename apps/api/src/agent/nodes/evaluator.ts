@@ -108,16 +108,34 @@ Has the goal been fully accomplished? Reply with ONLY the JSON object.`;
       }
     }
 
+    let goalStatus: 'COMPLETED_SUCCESS' | 'COMPLETED_NO_RESULTS' | undefined;
+    if (goalAchieved) {
+      const executorTraces = state.trace.filter((t) => t.nodeName === 'executor');
+      const lastExecutorTrace = executorTraces[executorTraces.length - 1];
+      const lastObservation = lastExecutorTrace?.details?.observation;
+
+      if (
+        lastObservation &&
+        lastObservation.successMetrics.businessSuccess === false &&
+        lastObservation.error === 'No matching results found.'
+      ) {
+        goalStatus = 'COMPLETED_NO_RESULTS';
+      } else {
+        goalStatus = 'COMPLETED_SUCCESS';
+      }
+    }
+
     return {
       // Signal the graph router: null nextToolCall + goalAchieved=true → END
       nextToolCall: goalAchieved ? undefined : state.nextToolCall,
+      goalStatus,
       trace: [
         {
           id: 'eval-' + Date.now(),
           nodeName: 'evaluator',
           timestamp: new Date().toISOString(),
           message: goalAchieved
-            ? `✅ Goal achieved: ${reason}`
+            ? `✅ Goal achieved (${goalStatus}): ${reason}`
             : `🔄 Continuing: ${reason}`,
           details: { goalAchieved, reason, summary },
         },

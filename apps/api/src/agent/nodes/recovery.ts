@@ -19,12 +19,72 @@ export async function recoveryNode(state: AgentState): Promise<Partial<AgentStat
   console.log('--- ENTERING RECOVERY NODE ---');
   const failureCount = state.consecutiveFailures;
 
+  // Track total recovery steps from the trace
+  const totalRecoveryAttempts = state.trace.filter((t) => t.nodeName === 'recovery').length;
+
+  if (totalRecoveryAttempts >= 3) {
+    console.error(`[Recovery] Max recovery attempts (3) reached. Aborting agent run.`);
+    return {
+      nextToolCall: undefined,
+      consecutiveFailures: 0,
+      goalStatus: 'ABORTED',
+      trace: [{
+        id: 'rec-' + Date.now(),
+        nodeName: 'recovery',
+        timestamp: new Date().toISOString(),
+        message: `❌ Abort: Reached maximum limit of 3 recovery attempts. Agent run halted.`,
+        details: { failureCount, totalRecoveryAttempts, action: 'aborted_max_recoveries' },
+      }],
+    };
+  }
+
+  // Check for duplicate tool execution loop (same tool, args, and output repeated)
+  const executorTraces = state.trace.filter((t) => t.nodeName === 'executor');
+  let hasDuplicateLoop = false;
+  if (executorTraces.length >= 2) {
+    const lastTrace = executorTraces[executorTraces.length - 1];
+    const lastCall = lastTrace.toolCalls?.[0];
+    if (lastCall) {
+      for (let i = 0; i < executorTraces.length - 1; i++) {
+        const prevCall = executorTraces[i].toolCalls?.[0];
+        if (!prevCall) continue;
+
+        if (
+          prevCall.server === lastCall.server &&
+          prevCall.tool === lastCall.tool &&
+          JSON.stringify(prevCall.arguments) === JSON.stringify(lastCall.arguments) &&
+          prevCall.output === lastCall.output
+        ) {
+          hasDuplicateLoop = true;
+          break;
+        }
+      }
+    }
+  }
+
+  if (hasDuplicateLoop) {
+    console.error(`[Recovery] Duplicate execution loop detected. Aborting agent run.`);
+    return {
+      nextToolCall: undefined,
+      consecutiveFailures: 0,
+      goalStatus: 'ABORTED',
+      trace: [{
+        id: 'rec-' + Date.now(),
+        nodeName: 'recovery',
+        timestamp: new Date().toISOString(),
+        message: `❌ Abort: Duplicate execution loop detected (tool returned identical output repeatedly).`,
+        details: { failureCount, action: 'aborted_duplicate_loop' },
+      }],
+    };
+  }
+
   // Hard abort: too many failures in a row
   if (failureCount >= MAX_CONSECUTIVE_FAILURES) {
     console.error(`[Recovery] ${failureCount} consecutive failures. Aborting run.`);
     return {
       nextToolCall: undefined,
       consecutiveFailures: 0,
+      goalStatus: 'ABORTED',
       trace: [{
         id: 'rec-' + Date.now(),
         nodeName: 'recovery',

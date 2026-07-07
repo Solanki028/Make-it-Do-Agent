@@ -14,18 +14,30 @@ export async function executorNode(state: AgentState): Promise<Partial<AgentStat
   const { id, server, tool, arguments: args } = toolCall;
   console.log(`Executing tool: ${server}__${tool} with args:`, args);
 
+  let transportSuccess = false;
+  let toolSuccess = false;
+  let businessSuccess = false;
+  let resultStr = '';
+  let errorStr = '';
+
   try {
-    let resultStr = '';
     if (id === 'mock-tool-id') {
+      transportSuccess = true;
+      toolSuccess = true;
+      businessSuccess = true;
       resultStr = JSON.stringify({
         status: 'success',
         files: ['package.json', 'README.md', 'apps/', 'tsconfig.json'],
         message: 'Mock file list retrieved successfully.',
       });
     } else {
+      // 1. Transport Success: connection & invocation completed without throwing exception
       const response = await mcpClientManager.executeTool(server, tool, args);
-      const isMcpError = response.isError === true;
-      
+      transportSuccess = true;
+
+      // 2. Tool Success: MCP server returned result without isError flag
+      toolSuccess = response.isError !== true;
+
       if (response.content && Array.isArray(response.content)) {
         const texts = response.content
           .filter((c: any) => c.type === 'text')
@@ -35,76 +47,99 @@ export async function executorNode(state: AgentState): Promise<Partial<AgentStat
         resultStr = JSON.stringify(response);
       }
 
-      if (isMcpError) {
-        throw new Error(resultStr || 'MCP tool execution failed.');
+      if (!resultStr || resultStr.trim() === '') {
+        resultStr = "Tool executed successfully, but returned no data.";
+      }
+
+      // 3. Business Success outcome evaluation
+      if (toolSuccess) {
+        const errorKeywords = ['error:', 'failed', 'invalid', 'denied', 'exception'];
+        const hasErrorKeyword = errorKeywords.some(keyword => resultStr.toLowerCase().includes(keyword));
+        
+        const emptyKeywords = ['no matches', 'no files', 'not found', 'no results', 'empty directory', '0 files'];
+        const hasEmptyKeyword = emptyKeywords.some(keyword => resultStr.toLowerCase().includes(keyword));
+        const isEmpty = resultStr.trim().length === 0 || hasEmptyKeyword;
+
+        if (hasErrorKeyword) {
+          businessSuccess = false;
+          errorStr = 'Business error keywords detected in output.';
+        } else if (isEmpty) {
+          businessSuccess = false; // Empty search is transportSuccess=true, toolSuccess=true, businessSuccess=false
+          errorStr = 'No matching results found.';
+        } else {
+          businessSuccess = true;
+        }
+      } else {
+        errorStr = resultStr || 'MCP tool execution returned an error flag.';
       }
     }
-
-    if (!resultStr || resultStr.trim() === '') {
-      resultStr = "Tool executed successfully, but returned no data.";
-    }
-
-    // ── Truncate output sent to the LLM ───────────────────────────────────
-    // Large file reads (e.g. .env, big JSON) blow past gpt-4o-mini's 8k limit.
-    // The full content is stored in trace for the UI; the LLM gets a trimmed version.
-    const MAX_LLM_OUTPUT_CHARS = 3000;
-    const fullOutput = resultStr;
-    const llmOutput = resultStr.length > MAX_LLM_OUTPUT_CHARS
-      ? resultStr.slice(0, MAX_LLM_OUTPUT_CHARS)
-        + `\n\n[...output truncated — ${resultStr.length - MAX_LLM_OUTPUT_CHARS} more chars not shown to save tokens. Full content is available above.]`
-      : resultStr;
-
-    const traceStep = {
-      id: 'exec-' + Date.now(),
-      nodeName: 'executor',
-      timestamp: new Date().toISOString(),
-      message: `Successfully executed tool ${tool} on server ${server}`,
-      toolCalls: [
-        {
-          server,
-          tool,
-          arguments: args,
-          status: 'success' as const,
-          output: fullOutput,  // Full output shown in UI
-        },
-      ],
-    };
-
-    const toolMsg = new ToolMessage({
-      content: llmOutput,       // Truncated output sent to LLM
-      name: `${server}__${tool}`,
-      tool_call_id: id,
-    });
-
-    return {
-      messages: [toolMsg],
-      nextToolCall: undefined,
-      consecutiveFailures: 0,
-      trace: [traceStep],
-    };
   } catch (err: any) {
-    console.error(`Tool execution failed for ${server}__${tool}:`, err);
-    
-    const traceStep = {
-      id: 'exec-' + Date.now(),
-      nodeName: 'executor',
-      timestamp: new Date().toISOString(),
-      message: `Failed to execute tool ${tool} on server ${server}`,
-      toolCalls: [
-        {
-          server,
-          tool,
-          arguments: args,
-          status: 'failed' as const,
-          error: err.message || 'Execution error',
-        },
-      ],
-    };
-
-    return {
-      consecutiveFailures: state.consecutiveFailures + 1,
-      nextToolCall: undefined,
-      trace: [traceStep],
-    };
+    transportSuccess = false;
+    toolSuccess = false;
+    businessSuccess = false;
+    errorStr = err.message || 'Transport connection/execution error';
+    resultStr = `Error (Transport): ${errorStr}`;
   }
+
+  // ── Truncate output sent to the LLM ───────────────────────────────────
+  const MAX_LLM_OUTPUT_CHARS = 3000;
+  const fullOutput = resultStr;
+  const llmOutput = resultStr.length > MAX_LLM_OUTPUT_CHARS
+    ? resultStr.slice(0, MAX_LLM_OUTPUT_CHARS)
+      + `\n\n[...output truncated — ${resultStr.length - MAX_LLM_OUTPUT_CHARS} more chars not shown to save tokens. Full content is available above.]`
+    : resultStr;
+
+  // Structured Observation Object
+  const observation = {
+    toolCallId: id,
+    server,
+    tool,
+    arguments: args,
+    successMetrics: {
+      transportSuccess,
+      toolSuccess,
+      businessSuccess,
+    },
+    output: fullOutput,
+    error: errorStr || undefined,
+  };
+
+  // Tool execution status: succeeds if transport & tool succeeded, and no business errors occurred
+  const hasBusinessError = !businessSuccess && errorStr !== 'No matching results found.' && errorStr !== '';
+  const toolExecutionSucceeded = transportSuccess && toolSuccess && !hasBusinessError;
+
+  const traceStep = {
+    id: 'exec-' + Date.now(),
+    nodeName: 'executor',
+    timestamp: new Date().toISOString(),
+    message: toolExecutionSucceeded
+      ? (businessSuccess ? `Successfully executed tool ${tool} on server ${server}` : `Executed tool ${tool} on server ${server}: ${errorStr}`)
+      : `Failed executing tool ${tool} on server ${server}: ${errorStr}`,
+    details: {
+      observation, // Exposed as structured observation
+    },
+    toolCalls: [
+      {
+        server,
+        tool,
+        arguments: args,
+        status: toolExecutionSucceeded ? ('success' as const) : ('failed' as const),
+        output: fullOutput,
+        error: toolExecutionSucceeded ? undefined : errorStr,
+      },
+    ],
+  };
+
+  const toolMsg = new ToolMessage({
+    content: toolExecutionSucceeded ? llmOutput : `Error: ${errorStr}\nDetails: ${llmOutput}`,
+    name: `${server}__${tool}`,
+    tool_call_id: id,
+  });
+
+  return {
+    messages: [toolMsg],
+    nextToolCall: undefined,
+    consecutiveFailures: toolExecutionSucceeded ? 0 : state.consecutiveFailures + 1,
+    trace: [traceStep],
+  };
 }

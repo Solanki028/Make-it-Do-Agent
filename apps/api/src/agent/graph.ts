@@ -112,6 +112,18 @@ function routeAfterValidator(state: AgentState): 'executor' | 'human_gate' | 're
 // We inspect the last evaluator trace entry for the goalAchieved flag.
 // ─────────────────────────────────────────────
 function routeAfterEvaluator(state: AgentState): typeof END | 'planner' {
+  // If goalStatus is resolved to a terminal state, terminate immediately
+  if (
+    state.goalStatus === 'COMPLETED_SUCCESS' ||
+    state.goalStatus === 'COMPLETED_NO_RESULTS' ||
+    state.goalStatus === 'ABORTED' ||
+    state.goalStatus === 'FAILED' ||
+    state.goalStatus === 'CANCELLED'
+  ) {
+    console.log(`[Router] Goal resolved with status: ${state.goalStatus} — terminating.`);
+    return END;
+  }
+
   // Hard stop: exceeded max steps
   if (state.stepCount >= state.maxSteps) {
     console.log('[Router] Max steps reached — terminating.');
@@ -143,11 +155,46 @@ function routeAfterEvaluator(state: AgentState): typeof END | 'planner' {
 // Router: Executor → Evaluator | Recovery
 // ─────────────────────────────────────────────
 function routeAfterExecutor(state: AgentState): 'evaluator' | 'recovery' {
-  // More than 2 consecutive failures → trigger recovery strategy
-  if (state.consecutiveFailures >= 2) {
+  // Check for duplicate tool execution loop
+  const executorTraces = state.trace.filter((t) => t.nodeName === 'executor');
+  let hasDuplicateLoop = false;
+  if (executorTraces.length >= 2) {
+    const lastTrace = executorTraces[executorTraces.length - 1];
+    const lastCall = lastTrace.toolCalls?.[0];
+    if (lastCall) {
+      for (let i = 0; i < executorTraces.length - 1; i++) {
+        const prevCall = executorTraces[i].toolCalls?.[0];
+        if (!prevCall) continue;
+
+        if (
+          prevCall.server === lastCall.server &&
+          prevCall.tool === lastCall.tool &&
+          JSON.stringify(prevCall.arguments) === JSON.stringify(lastCall.arguments) &&
+          prevCall.output === lastCall.output
+        ) {
+          hasDuplicateLoop = true;
+          break;
+        }
+      }
+    }
+  }
+
+  // More than 2 consecutive failures or duplicate loop → trigger recovery/abort strategy
+  if (state.consecutiveFailures >= 2 || hasDuplicateLoop) {
     return 'recovery';
   }
   return 'evaluator';
+}
+
+// ─────────────────────────────────────────────
+// Router: Recovery → Planner | END
+// ─────────────────────────────────────────────
+function routeAfterRecovery(state: AgentState): 'planner' | typeof END {
+  if (state.goalStatus === 'ABORTED' || state.goalStatus === 'FAILED') {
+    console.log('[Router] Recovery aborted the session — routing to END.');
+    return END;
+  }
+  return 'planner';
 }
 
 // ─────────────────────────────────────────────
@@ -183,7 +230,10 @@ const workflow = new StateGraph<AgentState>({
     recovery: 'recovery',
   })
 
-  .addEdge('recovery', 'planner')
+  .addConditionalEdges('recovery', routeAfterRecovery, {
+    planner: 'planner',
+    [END]: END,
+  })
   .addEdge('human_gate', END)  // Pause here — /approve endpoint re-runs graph
 
   .addConditionalEdges('evaluator', routeAfterEvaluator, {
